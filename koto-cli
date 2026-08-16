@@ -1,0 +1,989 @@
+#!/bin/sh
+
+version_number="1.0.0"
+
+# UI
+
+menu() {
+    # shellcheck disable=SC2086
+    case "$menu_program" in
+        fzf) fzf --reverse --cycle --prompt "$1" $2 $3 ;;
+        rofi) rofi -sort -dmenu -i -p "$1" $2 $3 ;;
+        dmenu) dmenu -l 20 -p "$1" $3 ;;
+        *) "$menu_program" $3 "$1" ;;
+    esac
+}
+
+nth() {
+    stdin=$(cat -)
+    [ -z "$stdin" ] && return 1
+    line_count="$(printf "%s\n" "$stdin" | wc -l | tr -d "[:space:]")"
+    [ "$line_count" -eq 1 ] && printf "%s" "$stdin" | cut -f2,3 && return 0
+    prompt="$1"
+    [ $# -ne 1 ] && multi_flag="$2"
+    line=$(printf "%s" "$stdin" | cut -f1,3 | tr '\t' ' ' | menu "$prompt" "$multi_flag" "$menu_extra_flags" | cut -d " " -f 1)
+    line_start=$(printf "%s" "$line" | head -n1)
+    line_end=$(printf "%s" "$line" | tail -n1)
+    [ -n "$line" ] || return 1
+    if [ "$line_start" = "$line_end" ]; then
+        printf "%s" "$stdin" | grep -E '^'"${line}"'($|[[:space:]])' | cut -f2,3 || return 1
+    else
+        printf "%s" "$stdin" | sed -n '/^'"${line_start}"'$/,/^'"${line_end}$"'/p' || return 1
+    fi
+}
+
+die() {
+    printf "\33[2K\r\033[1;31m%s\033[0m\n" "$*" >&2
+    exit 1
+}
+
+info() {
+    printf "\33[2K\r\033[1;34m%s\033[0m\n" "$*"
+}
+
+warn() {
+    printf "\33[2K\r\033[1;33m%s\033[0m\n" "$*" >&2
+}
+
+help_info() {
+    printf "
+    Usage:
+    %s [options] [query]
+    %s [query] [options]
+    %s [options] [query] [options]
+
+    Options:
+      -c, --continue
+        Continue watching from history
+      --resume
+        Resume playback from saved position (mpv only)
+      -d, --download
+        Download the video instead of playing it
+      --batch
+        Download all episodes of found anime (with progress)
+      -D, --delete
+        Delete history
+      -l, --logview
+        Show logs
+      -s, --syncplay
+        Use Syncplay to watch with friends
+      -S, --select-nth
+        Select nth entry
+      -q, --quality
+        Specify the video quality
+      -p, --provider
+        Choose the provider: anikoto (default)
+      -v, --vlc
+        Use VLC to play the video
+      -V, --version
+        Show the version of the script
+      -h, --help
+        Show this help message and exit
+      -e, --episode, -r, --range
+        Specify the number of episodes to watch
+      --dub
+        Play dubbed version
+      --rofi
+        Use rofi instead of fzf for the interactive menu
+      --dmenu
+        Use dmenu instead of fzf for the interactive menu
+      --skip
+        Use ani-skip to skip the intro of the episode (mpv only)
+      --no-detach
+        Don't detach the player (useful for in-terminal playback, mpv only)
+      --exit-after-play
+        Exit the player, and return the player exit code (useful for non interactive scenarios, mpv only)
+
+      -N, --nextep-countdown
+        Display a countdown to the next episode
+      -U, --update
+        Update the script
+    Some example usages:
+      %s -q 720p banana fish
+      %s --skip -S 2 one piece
+      %s -d -e 2 cyberpunk edgerunners
+      %s --batch one piece
+      %s --resume -c
+      %s --vlc cyberpunk edgerunners -q 1080p -e 4
+      %s blue lock -e 5-6
+      %s -e \"5 6\" blue lock
+    \n" "${0##*/}" "${0##*/}" "${0##*/}" "${0##*/}" "${0##*/}" "${0##*/}" "${0##*/}" "${0##*/}" "${0##*/}" "${0##*/}" "${0##*/}"
+    exit 0
+}
+
+version_info() {
+    printf "%s\n" "$version_number"
+    exit 0
+}
+
+update_script() {
+    info "[branch:$branch] Checking for Update.."
+    update="$(curl --fail-with-body -sL -A "$agent" "https://raw.githubusercontent.com/VVAT3R/koto-cli/$branch/koto-cli")" || die "[branch:$branch] Connection error: $update"
+    new_version="$(printf "%s" "$update" | sed -nE 's|^version_number="([^"]+)"$|\1|p')"
+    [ -z "$new_version" ] && die "[branch:$branch] Invalid response."
+    printf "%s" "$update" | grep -q "^version_number" || die "[branch:$branch] Invalid Response."
+    update="$(printf "%s\n" "$update" | diff -u "$0" -)"
+    if [ -z "$update" ]; then
+        info "[branch:$branch] Script is up to date :) ($version_number)"
+    else
+        if printf "%s\n" "$update" | patch "$0" -; then
+            info "[branch:$branch] Updated: $version_number -> $new_version"
+        else
+            die "[branch:$branch] Can't update for some reason!"
+        fi
+    fi
+    exit 0
+}
+
+# checks if dependencies are present
+dep_ch() {
+    for dep; do
+        command -v "${dep%% *}" >/dev/null || die "Program \"${dep%% *}\" not found. Please install it."
+    done
+}
+
+dep_ch_failover() {
+    [ -z "$1" ] && return 1
+    prog=$(printf "%s" "$1" | cut -d"," -f 1)
+    rest=$(printf "%s" "$1" | cut -s -d"," -f 2-)
+    command -v "$prog" >/dev/null 2>&1 && printf "%s" "$prog" && return 0
+    [ -e "$prog" ] && printf "%s" "$prog" && return 0
+    dep_ch_failover "$rest"
+}
+
+where_iina() {
+    [ -e "/Applications/IINA.app/Contents/MacOS/iina-cli" ] && echo "/Applications/IINA.app/Contents/MacOS/iina-cli" && return 0
+    printf "%s" "iina" && return 0
+}
+
+where_mpv() {
+    command -v "flatpak" >/dev/null && flatpak info io.mpv.Mpv >/dev/null 2>&1 && printf "%s" "flatpak_mpv" && return 0
+    printf "%s" "mpv" && return 0
+}
+
+cleanup() {
+    tput sgr0               # clears colors
+    rm -f "${histfile}.new" # remove temp logfile
+    anikoto_feed_cleanup
+}
+
+# SCRAPING
+
+select_quality() {
+    case "$1" in
+        best) result=$(printf "%s" "$links" | head -n1) ;;
+        worst) result=$(printf "%s" "$links" | grep -E '^[0-9]{3,4}' | tail -n1) ;;
+        *) result=$(printf "%s" "$links" | grep -m 1 "$1") ;;
+    esac
+    [ -z "$result" ] && warn "Specified quality not found, defaulting to best" && result=$(printf "%s" "$links" | head -n1)
+
+    refr_flag="--referrer=${anikoto_referer:-$provider_base}/"
+    episode=$(printf "%s" "$result" | cut -d'>' -f2)
+
+    # obfuscated streams (megaplay) need the local FIFO feed to play
+    if [ "$anikoto_direct" != 1 ] && [ -n "$episode" ]; then
+        if [ -n "$anikoto_feed_pid" ] && [ "$anikoto_feed_variant" != "$episode" ]; then
+            anikoto_feed_cleanup
+        fi
+        [ -z "$anikoto_feed_pid" ] && start_anikoto_fifo "$episode"
+        anikoto_feed_variant="$episode"
+        episode="$anikoto_feed_m3u8"
+    fi
+}
+
+# anikototv.to: search, get episodes, extract m3u8
+provider_base="https://anikototv.to"
+
+anikoto_curl() {
+    _retries=3
+    _result=""
+    while [ $_retries -gt 0 ]; do
+        _result="$($curl_exe -sL -A "$agent" \
+            -H 'X-Requested-With: XMLHttpRequest' \
+            --max-time 15 "$@" 2>/dev/null | tr -d '\r')"
+        [ -n "$_result" ] && printf '%s' "$_result" && return 0
+        _retries=$((_retries - 1))
+        [ $_retries -gt 0 ] && sleep 1
+    done
+    return 1
+}
+
+search_anikoto() {
+    _query="$(printf '%s' "$1" | sed 's/ /+/g')"
+    _page="$(anikoto_curl "${provider_base}/ajax/anime/search?keyword=${_query}")"
+    printf '%s' "$_page" | grep -qi "Just a moment" && die "Blocked by cloudflare"
+    printf '%s' "$_page" | sed -e 's|\\/|/|g' -e 's|\\"|"|g' -e 's|<a class="item"|\n<a class="item"|g' \
+        | sed -nE 's|.*/watch/([a-z0-9-]+)".*name d-title"[^>]*>([^<]+).*|\1\t\2|p' \
+        | sed -e "s|&amp;#039;|'|g" -e "s|&#039;|'|g" -e 's|&amp;quot;|"|g' -e 's|&quot;|"|g'
+}
+
+# cache the numeric anime id and the episodes JSON per anime to avoid refetching
+anikoto_numeric_id=""
+anikoto_numeric_slug=""
+anime_id_anikoto() {
+    _slug="$1"
+    if [ "$anikoto_numeric_slug" != "$_slug" ]; then
+        _page="$(anikoto_curl "${provider_base}/watch/${_slug}")"
+        anikoto_numeric_id="$(printf '%s' "$_page" | tr '\n' ' ' | sed -nE 's|.*id="watch-main"[^>]*data-id="([0-9]+)".*|\1|p')"
+        [ -z "$anikoto_numeric_id" ] && anikoto_numeric_id="$(printf '%s' "$_page" | grep -oE 'mangaId = [0-9]+' | head -1 | grep -oE '[0-9]+')"
+        anikoto_numeric_slug="$_slug"
+    fi
+    [ -n "$anikoto_numeric_id" ] || return 1
+}
+
+anikoto_ep_json=""
+anikoto_ep_json_id=""
+anime_episodes_json_anikoto() {
+    _id="$1"
+    if [ "$anikoto_ep_json_id" != "$_id" ]; then
+        anikoto_ep_json="$(anikoto_curl "${provider_base}/ajax/episode/list/${_id}")"
+        anikoto_ep_json_id="$_id"
+    fi
+}
+
+episodes_list_anikoto() {
+    _slug="$1"
+    anime_id_anikoto "$_slug" || return 1
+    anime_episodes_json_anikoto "$anikoto_numeric_id"
+    printf '%s' "$anikoto_ep_json" | sed -e 's|\\"|"|g' -e 's|\\/|/|g' \
+        | grep -oE 'data-num="[0-9]+"' | grep -oE '[0-9]+' | sort -n -u
+}
+
+anikoto_desc() {
+    _slug="$1"
+    anime_id_anikoto "$_slug" || return 1
+    anime_episodes_json_anikoto "$anikoto_numeric_id"
+    _first="$(printf '%s' "$anikoto_ep_json" | sed -e 's|\\"|"|g' -e 's|\\/|/|g' \
+        | sed 's|<a |\n<a |g' | grep 'data-num="1"' | head -1)"
+    mal_id="$(printf '%s' "$_first" | grep -oE 'data-mal="[0-9]+"' | head -1 | cut -d'"' -f2)"
+}
+
+anikoto_m3u8=""
+anikoto_referer=""
+anikoto_direct=0
+# extract server link-ids from a servers JSON; each type is tried in order and
+# all matching links are returned (hsub = hard subs, sub = soft subs, dub)
+anikoto_server_links() {
+    _json="$1"
+    _types="$2"
+    _all=""
+    for _t in $_types; do
+        _found="$(printf '%s' "$_json" | sed -e 's|\\"|"|g' -e 's|\\/|/|g' \
+            | sed 's|<div class="type"|\n<div class="type"|g' \
+            | grep "data-type=\"${_t}\"" | head -1 \
+            | grep -oE 'data-link-id="[^"]*"' | cut -d'"' -f2)"
+        [ -n "$_found" ] && _all="$_all $_found"
+    done
+    printf '%s' "$_all"
+}
+get_anikoto_m3u8() {
+    _slug="$1"
+    _ep_no="$2"
+    anikoto_m3u8=""
+    anikoto_referer=""
+    anikoto_direct=0
+    anime_id_anikoto "$_slug" || return 1
+    anime_episodes_json_anikoto "$anikoto_numeric_id"
+    _anchor="$(printf '%s' "$anikoto_ep_json" | sed -e 's|\\"|"|g' -e 's|\\/|/|g' \
+        | sed 's|<a |\n<a |g' | grep "data-num=\"${_ep_no}\"" | head -1)"
+    [ -z "$_anchor" ] && return 1
+    _ids="$(printf '%s' "$_anchor" | grep -oE 'data-ids="[^"]*"' | head -1 | cut -d'"' -f2)"
+    [ -z "$_ids" ] && return 1
+    if [ "$mode" = "dub" ]; then
+        _link_types="dub"
+    else
+        # only hard-subbed servers (hsub)
+        _link_types="hsub"
+    fi
+    _stream_type="$_link_types"
+    _servers="$(anikoto_curl "${provider_base}/ajax/server/list?servers=${_ids}")"
+    _links="$(anikoto_server_links "$_servers" "$_link_types")"
+    if [ -z "$_links" ]; then
+        # servers may have expired, ask the site to refresh them once
+        anikoto_curl "${provider_base}/check-server?manga_id=${anikoto_numeric_id}" >/dev/null 2>&1
+        sleep 2
+        _servers="$(anikoto_curl "${provider_base}/ajax/server/list?servers=${_ids}")"
+        _links="$(anikoto_server_links "$_servers" "$_link_types")"
+    fi
+    [ -z "$_links" ] && return 1
+    # resolve every server's embed URL up front and try direct-playable hosts first
+    _direct_urls=""
+    _proxied_urls=""
+    for _link in $_links; do
+        _embed="$(anikoto_curl "${provider_base}/ajax/server?get=${_link}")"
+        _embed_url="$(printf '%s' "$_embed" | sed -nE 's|.*"url": *"([^"]*)".*|\1|p' | sed 's|\\/|/|g')"
+        [ -z "$_embed_url" ] && continue
+        case "$_embed_url" in
+            *vidtube*|*akirax*) _direct_urls="$_direct_urls $_embed_url" ;;
+            *) _proxied_urls="$_proxied_urls $_embed_url" ;;
+        esac
+    done
+    for _embed_url in $_direct_urls $_proxied_urls; do
+        [ -z "$_embed_url" ] && continue
+        _embed_page="$(anikoto_curl -e "${provider_base}/" "$_embed_url")"
+        _file_id="$(printf '%s' "$_embed_page" | tr '\n' ' ' | sed -nE 's|.*id="megaplay-player"[^>]*data-id="([0-9]+)".*|\1|p')"
+        [ -z "$_file_id" ] && continue
+        _host="$(printf '%s' "$_embed_url" | sed -E 's|/stream/.*||')"
+        _src="$(anikoto_curl "${_host}/stream/getSources?id=${_file_id}&type=${_stream_type}")"
+        _m3u8="$(printf '%s' "$_src" | sed -nE 's|.*"sources":\{"file":"([^"]*)".*|\1|p' | sed 's|\\/|/|g')"
+        [ -z "$_m3u8" ] && continue
+        anikoto_m3u8="$_m3u8"
+        anikoto_referer="$_host"
+        case "$_embed_url" in
+            *vidtube*|*akirax*) anikoto_direct=1 ;;
+            *) anikoto_direct=0 ;;
+        esac
+        return 0
+    done
+    return 1
+}
+
+anikoto_feed_pid=""
+anikoto_feed_dir=""
+anikoto_feed_m3u8=""
+anikoto_feed_variant=""
+anikoto_feed_fifo=0
+# finds where the real MPEG-TS stream starts inside an obfuscated segment:
+# 4 sync bytes (0x47 = 71) spaced 188 bytes apart, prints the 0-based offset
+detect_ts_offset() {
+    od -An -v -t u1 "$1" 2>/dev/null | tr -s '[:space:]' '\n' | awk '
+        NF { b[n++] = $1 }
+        END {
+            for (o = 0; o + 564 < n; o++) {
+                if (b[o] == 71 && b[o + 188] == 71 && b[o + 376] == 71 && b[o + 564] == 71) { print o; exit }
+            }
+        }'
+}
+
+# background feeder: downloads each obfuscated segment, strips the junk prefix
+# and writes clean MPEG-TS so the player can read it (pure POSIX shell, no
+# python3). segments are named pipes during download (flow control, so the
+# downloader can't outrun the network) and regular files during playback
+# (written via .part + atomic mv so a partial segment is never visible, which
+# lets mpv re-open segments for backward seeking)
+anikoto_feed_stream() {
+    _dir="$1"
+    _off="$2"
+    _i=0
+    _skip_first=0
+    if [ -s "$_dir/probe.raw" ]; then
+        tail -c +$((_off + 1)) "$_dir/probe.raw" > "$_dir/seg0.ts"
+        rm -f "$_dir/probe.raw"
+        _i=1
+        # seg0.ts was already written from the probe, so don't re-download the
+        # first entry of segments.txt (that would shift every segment by one
+        # and break seeking in the player)
+        _skip_first=1
+    fi
+    _ln=0
+    while IFS= read -r _url; do
+        _ln=$((_ln + 1))
+        [ "$_skip_first" = 1 ] && [ "$_ln" -eq 1 ] && continue
+        [ -z "$_url" ] && continue
+        if [ -p "$_dir/seg${_i}.ts" ]; then
+            curl -sL -m 60 -A "$agent" -e "${anikoto_referer}/" "$_url" \
+                | tail -c +$((_off + 1)) > "$_dir/seg${_i}.ts"
+        else
+            curl -sL -m 60 -A "$agent" -e "${anikoto_referer}/" "$_url" \
+                | tail -c +$((_off + 1)) > "$_dir/seg${_i}.ts.part"
+            mv "$_dir/seg${_i}.ts.part" "$_dir/seg${_i}.ts"
+        fi
+        _i=$((_i + 1))
+    done < "$_dir/segments.txt"
+}
+
+# builds a local m3u8 + segment cache for an obfuscated variant stream and
+# starts the feeder; the junk prefix length is auto-detected like the old
+# proxy did. downloads use named pipes (flow control), playback uses regular
+# files (seekable), so mpv can rewind during an episode
+start_anikoto_fifo() {
+    _variant_url="$1"
+    _pl="$(anikoto_curl -e "${anikoto_referer}/" "$_variant_url")"
+    printf '%s' "$_pl" | grep -q "EXTM3U" || { warn "Failed to fetch HLS playlist for stream"; return 1; }
+    anikoto_feed_dir="$(mktemp -d "${TMPDIR:-/tmp}/anikoto-fifo-XXXXXX")" || return 1
+    anikoto_feed_fifo=0
+    [ "$player_function" = "download" ] && anikoto_feed_fifo=1
+    : > "$anikoto_feed_dir/segments.txt"
+    _i=0
+    printf '%s\n' "$_pl" | while IFS= read -r _line; do
+        _s="$(printf '%s\n' "$_line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+        case "$_s" in
+            \#*) printf '%s\n' "$_line" ;;
+            *)
+                printf '%s\n' "$anikoto_feed_dir/seg${_i}.ts"
+                [ "$anikoto_feed_fifo" = 1 ] && mkfifo "$anikoto_feed_dir/seg${_i}.ts"
+                printf '%s\n' "$_s" >> "$anikoto_feed_dir/segments.txt"
+                _i=$((_i + 1))
+                ;;
+        esac
+    done > "$anikoto_feed_dir/playlist.m3u8"
+
+    # auto-detect the junk offset from the first segment; the background feeder
+    # feeds seg0 from this probe and streams the rest (writing into a FIFO
+    # before the player opens it would block, so that must happen in background)
+    _off=252
+    _first="$(head -n1 "$anikoto_feed_dir/segments.txt")"
+    if [ -n "$_first" ]; then
+        curl -sL -m 60 -A "$agent" -e "${anikoto_referer}/" "$_first" > "$anikoto_feed_dir/probe.raw"
+        if [ -s "$anikoto_feed_dir/probe.raw" ]; then
+            _detected="$(detect_ts_offset "$anikoto_feed_dir/probe.raw")"
+            # a detected offset of 0 means the segment is already clean MPEG-TS,
+            # so nothing should be stripped (only keep 252 when detection fails)
+            [ -n "$_detected" ] && _off="$_detected"
+        else
+            rm -f "$anikoto_feed_dir/probe.raw"
+        fi
+    fi
+    [ ! -s "$anikoto_feed_dir/segments.txt" ] \
+        && { warn "No segments in HLS playlist for stream"; rm -rf "$anikoto_feed_dir"; anikoto_feed_dir=""; return 1; }
+
+    anikoto_feed_m3u8="$anikoto_feed_dir/playlist.m3u8"
+    _pidfile="$anikoto_feed_dir/feed.pid"
+    # daemonize (orphan it) so the shell's `wait` doesn't block on it
+    (anikoto_feed_stream "$anikoto_feed_dir" "$_off" &
+        printf '%s' "$!" >"$_pidfile")
+    sleep 1
+    anikoto_feed_pid="$(cat "$_pidfile" 2>/dev/null)"
+    if [ -z "$anikoto_feed_pid" ]; then
+        warn "Failed to start stream feeder"
+        rm -rf "$anikoto_feed_dir"
+        anikoto_feed_dir=""
+        return 1
+    fi
+
+    # playback: buffer the first few segments so mpv starts without stalling
+    if [ "$anikoto_feed_fifo" != 1 ]; then
+        _n=0
+        _waits=0
+        while [ "$_waits" -lt 30 ]; do
+            _n=0
+            while [ -f "$anikoto_feed_dir/seg$_n.ts" ]; do _n=$((_n + 1)); done
+            [ "$_n" -ge 3 ] && break
+            sleep 1
+            _waits=$((_waits + 1))
+        done
+    fi
+}
+
+anikoto_feed_cleanup() {
+    if [ -n "$anikoto_feed_pid" ]; then
+        kill "$anikoto_feed_pid" 2>/dev/null
+        wait "$anikoto_feed_pid" 2>/dev/null
+        anikoto_feed_pid=""
+    fi
+    [ -n "$anikoto_feed_dir" ] && rm -rf "$anikoto_feed_dir"
+    anikoto_feed_dir=""
+    anikoto_feed_m3u8=""
+    anikoto_feed_variant=""
+    anikoto_feed_fifo=0
+}
+
+# gets m3u8 stream URL from the active provider and selects quality
+get_episode_url() {
+    links=""
+
+    if get_anikoto_m3u8 "$id" "$ep_no"; then
+        _m3u8_content="$(anikoto_curl -e "${anikoto_referer}/" "$anikoto_m3u8")"
+        if printf '%s' "$_m3u8_content" | grep -q "EXTM3U"; then
+            _base="$(printf '%s' "$anikoto_m3u8" | sed 's|[^/]*$||')"
+            links="$(printf '%s' "$_m3u8_content" | sed 's|^#EXT-X-STREAM.*x||g; s|,.*|p|g; /^#/d; $!N; s|\n| >|; /EXT-X-I-FRAME/d' | sort -nr)"
+            # variant URLs may be relative - expand them against the master's base
+            links="$(printf '%s' "$links" | awk -v b="$_base" -F'>' 'BEGIN{OFS=">"} $2 !~ /^https?:/ {print $1, b $2} $2 ~ /^https?:/ {print}')"
+            [ -n "$links" ] && printf "\033[1;32m%s\033[0m Links Fetched\n" "anikototv.to" 1>&2
+        fi
+    fi
+
+    select_quality "$quality"
+    if printf "%s" "$ep_list" | grep -q "^$ep_no$"; then
+        [ -z "$episode" ] && die "Episode is released, but no valid sources!"
+    else
+        [ -z "$episode" ] && die "Episode not released!"
+    fi
+}
+
+time_until_next_ep() {
+    animeschedule="https://animeschedule.net"
+    query="$(printf "%s\n" "$*" | tr ' ' '+')"
+    curl --max-time 5 -s -G "$animeschedule/api/v3/anime" --data "q=${query}" | sed 's|"id"|\n|g' | sed -nE 's|.*,"route":"([^"]*)","premier.*|\1|p' | while read -r anime; do
+        data=$(curl --max-time 5 -s "$animeschedule/anime/$anime" | sed '1,/"anime-header-list-buttons-wrapper"/d' | sed -nE 's|.*countdown-time-raw" datetime="([^"]*)".*|Next Raw Release: \1|p;s|.*countdown-time" datetime="([^"]*)".*|Next Sub Release: \1|p;s|.*english-title">([^<]*)<.*|English Title: \1|p;s|.*main-title".*>([^<]*)<.*|Japanese Title: \1|p')
+        status="Ongoing"
+        color="33"
+        printf "%s\n" "$data"
+        ! (printf "%s\n" "$data" | grep -q "Next Raw Release:") && status="Finished" && color="32"
+        printf "Status:  \033[1;%sm%s\033[0m\n---\n" "$color" "$status"
+    done
+    exit 0
+}
+
+# PLAYING
+
+process_hist_entry() {
+    ep_list=$(episodes_list_anikoto "$id")
+    latest_ep=$(printf "%s\n" "$ep_list" | tail -n1)
+    title=$(printf "%s\n" "$title" | sed "s|[0-9]\+ episodes|${latest_ep} episodes|")
+    ep_no=$(printf "%s" "$ep_list" | sed -n "/^${ep_no}$/{n;p;}")
+    [ -n "$ep_no" ] && printf "%s\t%s - episode %s\n" "$id" "$title" "$ep_no"
+    [ -n "$ep_no" ] || printf "%s\t%s - episode %s (up to date)\n" "$id" "$title" "$latest_ep"
+}
+
+update_history() {
+    _pos="${1:-0}"
+    if grep -q "	${id}	" "$histfile"; then
+        safe_title=$(printf '%s' "$title" | sed 's/[&\|]/\\&/g')
+        sed -E "s|^[^	]+	${id}	[^	]+(	[^	]+)?$|${ep_no}	${id}	${safe_title}	${_pos}|" "$histfile" >"${histfile}.new"
+    else
+        cp "$histfile" "${histfile}.new"
+        printf "%s\t%s\t%s\t%s\n" "$ep_no" "$id" "$title" "$_pos" >>"${histfile}.new"
+    fi
+    mv "${histfile}.new" "$histfile"
+}
+
+backup_old_hist() {
+    backupfile="${histfile}.v4"
+    : >"${histfile}.new"
+    while IFS="	" read -r _ep _id _title _pos; do
+        case "$_id" in
+            *-*) printf "%s\t%s\t%s\t%s\n" "$_ep" "$_id" "$_title" "$_pos" >>"${histfile}.new" ;;
+            *) printf "%s\t%s\t%s\t%s\n" "$_ep" "$_id" "$_title" "$_pos" >>"$backupfile" ;;
+        esac
+    done <"$histfile"
+    mv "${histfile}.new" "$histfile"
+}
+
+get_mpv_position() {
+    _socket="/tmp/koto-cli-mpv-$$"
+    if [ -S "$_socket" ]; then
+        _pos=$(printf '{ "command": ["get_property", "time-pos"] }\n' | socat - UNIX-CONNECT:"$_socket" 2>/dev/null | sed -nE 's|.*"data":([0-9.]+).*|\1|p')
+        [ -n "$_pos" ] && printf "%s" "$_pos" && return 0
+    fi
+    printf "0"
+}
+
+resume_episode() {
+    _hist_id="$1"
+    _pos=$(grep -- "$_hist_id" "$histfile" | cut -f4)
+    [ -z "$_pos" ] || [ "$_pos" = "0" ] && return 1
+    printf "%.0f" "$_pos"
+}
+
+download() {
+    _dl_refr="${refr_flag#--referrer=}"
+    case $1 in
+        *m3u8*)
+            command -v "yt-dlp" >/dev/null && yt-dlp --referer "$_dl_refr" "$1" --no-skip-unavailable-fragments --fragment-retries infinite -N 16 -o "$download_dir/$2.mp4" && return 0
+            ffmpeg -extension_picky 0 -referer "$_dl_refr" -loglevel error -stats -i "$1" -c copy "$download_dir/$2.mp4"
+            ;;
+        *)
+            # shellcheck disable=SC2086
+            aria2c --referer="$_dl_refr" --enable-rpc=false --check-certificate=false --continue $iSH_DownFix --summary-interval=0 -x 16 -s 16 "$1" --dir="$download_dir" -o "$2.mp4" --download-result=hide
+            ;;
+    esac
+}
+
+android_mpv() {
+    dir="/storage/emulated/0/mpv"
+    file="$dir/mpv.config.mp4"
+    if [ -w "${dir%*/mpv}" ]; then
+        [ -d "${dir}" ] || mkdir "${dir}"
+        printf "%s" "$3" | sed 's| --|\n|g; s|^--||g' >"$file"
+    fi
+    am start --user 0 -a android.intent.action.VIEW -d "$1" -n is.xyz.mpv/.MPVActivity -e "title" "$2" >/dev/null 2>&1
+    unset dir file
+}
+
+play_episode() {
+    [ "$log_episode" = 1 ] && [ "$player_function" != "debug" ] && [ "$player_function" != "download" ] && command -v logger >/dev/null &&         logger -t koto-cli "${anime_title}${ep_no}"
+    [ "$skip_intro" = 1 ] && skip_flag="$(ani-skip -q "$mal_id" -e "$canon_ep_no")"
+    [ -z "$episode" ] && get_episode_url
+
+    # wait for the previous player to close before starting a new one
+    wait 2>/dev/null
+
+    # resume position
+    _resume_pos=""
+    if [ "$resume_enabled" = 1 ]; then
+        _resume_pos=$(resume_episode "$id")
+        [ -n "$_resume_pos" ] && [ "$_resume_pos" != "0" ] && warn "Resuming from $_resume_pos seconds..."
+    fi
+
+    # mpv socket for position tracking
+    _mpv_socket=""
+    case "$player_function" in
+        mpv*|flatpak_mpv)
+            _mpv_socket="/tmp/koto-cli-mpv-$$"
+            ;;
+    esac
+
+    # shellcheck disable=SC2086
+    case "$player_function" in
+        debug)
+            printf "All links:\n%s\nSelected link:\n" "$links"
+            printf "%s\n" "$episode"
+            ;;
+        mpv*)
+            _mpv_args=""
+            [ -n "$_mpv_socket" ] && rm -f "$_mpv_socket"
+            [ -n "$_mpv_socket" ] && _mpv_args="--input-ipc-server=$_mpv_socket"
+            [ -n "$_resume_pos" ] && [ "$_resume_pos" != "0" ] && _mpv_args="$_mpv_args --start=$_resume_pos"
+            # the local feed is a bunch of plain files, so mpv disables its
+            # cache by default; enable it so the buffer bar shows and mpv reads
+            # ahead (which also lets it seek into already-downloaded segments)
+            if [ -n "$anikoto_feed_m3u8" ]; then
+                _mpv_args="$_mpv_args --cache=yes --demuxer-max-bytes=512MiB --demuxer-max-back-bytes=256MiB"
+            fi
+            if [ "$no_detach" = 0 ]; then
+                nohup $player_function $_mpv_args $skip_flag --tls-verify=no --force-media-title="${anime_title}Episode ${ep_no}" "$episode" $refr_flag $player_extra_flags >/dev/null 2>&1 &
+            else
+                $player_function $_mpv_args $skip_flag $refr_flag --tls-verify=no --force-media-title="${anime_title}Episode ${ep_no}" "$episode" $player_extra_flags
+                mpv_exitcode=$?
+                [ "$exit_after_play" = 1 ] && [ -z "$range" ] && exit "$mpv_exitcode"
+            fi
+            ;;
+        android_mpv) "$player_function" "$episode" "${anime_title}Episode ${ep_no}" "--tls-verify=no $refr_flag" $player_extra_flags 2>&1 & ;;
+        android_vlc) nohup am start --user 0 -a android.intent.action.VIEW -d "$episode" -n org.videolan.vlc/org.videolan.vlc.gui.video.VideoPlayerActivity -e "title" "${anime_title}Episode ${ep_no}" $player_extra_flags >/dev/null 2>&1 & ;;
+        *iina*)
+            [ -n "$refr_flag" ] && refr_flag="--mpv-${refr_flag#--}"
+            if pgrep -f "IINA" >/dev/null 2>&1; then
+                nohup $player_function --no-stdin --mpv-tls-verify=no --mpv-force-media-title="${anime_title}Episode ${ep_no}" $refr_flag "$episode" $player_extra_flags >/dev/null 2>&1 &
+            else
+                nohup $player_function --no-stdin --mpv-tls-verify=no --keep-running --mpv-force-media-title="${anime_title}Episode ${ep_no}" $refr_flag "$episode" $player_extra_flags >/dev/null 2>&1 &
+            fi
+            ;;
+        flatpak_mpv) flatpak run io.mpv.Mpv --input-ipc-server="$_mpv_socket" --start="$_resume_pos" --tls-verify=no --force-media-title="${anime_title}Episode ${ep_no}" "$episode" $refr_flag $player_extra_flags >/dev/null 2>&1 & ;;
+        vlc*) nohup $player_function --http-referrer="${refr_flag#--referrer=}" --play-and-exit --meta-title="${anime_title}Episode ${ep_no}" "$episode" $player_extra_flags >/dev/null 2>&1 & ;;
+        *yncpla*) nohup $player_function "$episode" $player_extra_flags -- --tls-verify=no --force-media-title="${anime_title}Episode ${ep_no}" $refr_flag >/dev/null 2>&1 & ;;
+        download) "$player_function" "$episode" "${anime_title}Episode ${ep_no}" $player_extra_flags ;;
+        catt) nohup catt cast "$episode" $player_extra_flags >/dev/null 2>&1 & ;;
+        iSH)
+            printf "\e]8;;vlc://%s\a~~~~~~~~~~~~~~~~~~~~\n~ Tap to open VLC ~\n~~~~~~~~~~~~~~~~~~~~\e]8;;\a\n" "$episode"
+            sleep 5
+            ;;
+        *) nohup $player_function "$episode" $player_extra_flags >/dev/null 2>&1 & ;;
+    esac
+    replay="$episode"
+    unset episode
+
+    # save playback position
+    case "$player_function" in
+        mpv*|flatpak_mpv)
+            if [ "$menu_program" != "fzf" ]; then
+                _final_pos=0
+                while kill -0 "$!" 2>/dev/null; do
+                    _pos=$(get_mpv_position)
+                    [ -n "$_pos" ] && [ "$_pos" != "0" ] && _final_pos=$_pos
+                    sleep 2
+                done
+                update_history "$_final_pos"
+            fi
+            ;;
+        *)
+            update_history "0"
+            ;;
+    esac
+    [ "$menu_program" != "fzf" ] && wait
+}
+
+play() {
+    start=$(printf "%s" "$ep_no" | grep -Eo '^(-1|[0-9]+(\.[0-9]+)?)')
+    end=$(printf "%s" "$ep_no" | grep -Eo '(-1|[0-9]+(\.[0-9]+)?)$')
+    [ "$start" = "-1" ] && ep_no=$(printf "%s" "$ep_list" | tail -n1) && unset start
+    [ -z "$end" ] || [ "$end" = "$start" ] && unset start end
+    [ "$end" = "-1" ] && end=$(printf "%s" "$ep_list" | tail -n1)
+    line_count=$(printf "%s\n" "$ep_no" | wc -l | tr -d "[:space:]")
+    if [ "$line_count" != 1 ] || [ -n "$start" ]; then
+        [ -z "$start" ] && start=$(printf "%s\n" "$ep_no" | head -n1)
+        [ -z "$end" ] && end=$(printf "%s\n" "$ep_no" | tail -n1)
+        range=$(printf "%s\n" "$ep_list" | sed -nE "/^${start}\$/,/^${end}\$/p")
+        [ -z "$range" ] && die "Invalid range!"
+
+        # batch download progress
+        if [ "$batch_mode" = 1 ]; then
+            _total=$(printf "%s\n" "$range" | wc -l | tr -d " ")
+            _count=0
+        fi
+
+        for i in $range; do
+            tput clear
+            ep_no=$i
+            canon_ep_no="$(printf "%s" "$ep_list" | sed -n "/^${ep_no}$/=")"
+            if [ "$batch_mode" = 1 ]; then
+                _count=$((_count + 1))
+                printf "\33[2K\r\033[1;34m[%s/%s] Downloading episode %s...\033[0m\n" "$_count" "$_total" "$ep_no"
+                # skip if already downloaded
+                _fname="${anime_title}Episode ${ep_no}.mp4"
+                if [ -f "$download_dir/$_fname" ]; then
+                    printf "\33[2K\r\033[1;33mSkipping episode %s (already exists)\033[0m\n" "$ep_no"
+                    continue
+                fi
+            else
+                info "Playing episode $ep_no..."
+            fi
+            [ "$i" = "$end" ] && unset range
+            play_episode
+        done
+    else
+        canon_ep_no="$(printf "%s" "$ep_list" | sed -n "/^${ep_no}$/=")"
+        play_episode
+    fi
+    # moves up to stored position and deletes to end
+    [ "$player_function" != "debug" ] && [ "$player_function" != "download" ] && tput rc && tput ed
+}
+
+# MAIN
+
+# setup
+agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0"
+
+curl_exe=$(dep_ch_failover "curl_chrome136,curl_firefox135,curl_ff117,curl") || die "Program curl not found"
+mode="${KOTO_CLI_MODE:-sub}"
+provider="${KOTO_CLI_PROVIDER:-anikoto}"
+download_dir="${KOTO_CLI_DOWNLOAD_DIR:-.}"
+log_episode="${KOTO_CLI_LOG:-1}"
+quality="${KOTO_CLI_QUALITY:-best}"
+case "$(uname -a | cut -d " " -f 1,3-)" in
+    *Darwin*) player_function="${KOTO_CLI_PLAYER:-$(where_iina)}" ;;   # mac OS
+    *ndroid*) player_function="${KOTO_CLI_PLAYER:-android_mpv}" ;;     # Android OS (termux)
+    *MINGW* | *WSL2*) player_function="${KOTO_CLI_PLAYER:-mpv.exe}" ;; # Windows OS
+    *ish*) player_function="${KOTO_CLI_PLAYER:-iSH}" ;;                # iOS (iSH)
+    *) player_function="${KOTO_CLI_PLAYER:-$(where_mpv)}" ;;           # Linux OS
+esac
+
+player_extra_flags="${KOTO_CLI_PLAYER_FLAGS:-}"
+no_detach="${KOTO_CLI_NO_DETACH:-0}"
+exit_after_play="${KOTO_CLI_EXIT_AFTER_PLAY:-0}"
+skip_intro="${KOTO_CLI_SKIP_INTRO:-0}"
+menu_program="${KOTO_CLI_MENU:-fzf}"
+menu_extra_flags="${KOTO_CLI_MENU_FLAGS:-}"
+
+[ -t 0 ] || { command -v rofi >/dev/null 2>&1 && menu_program=rofi; }
+[ -t 0 ] || { command -v dmenu >/dev/null 2>&1 && menu_program=dmenu; }
+
+hist_dir="${KOTO_CLI_HIST_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/koto-cli}"
+[ ! -d "$hist_dir" ] && mkdir -p "$hist_dir"
+histfile="$hist_dir/koto-hsts"
+[ ! -f "$histfile" ] && : >"$histfile"
+search="search"
+branch="${KOTO_CLI_BRANCH:-main}"
+resume_enabled=0
+batch_mode=0
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -v | --vlc)
+            case "$(uname -a | cut -d " " -f 1,3-)" in
+                *ndroid*) player_function="android_vlc" ;;
+                MINGW* | *WSL2*) player_function="vlc.exe" ;;
+                *ish*) player_function="iSH" ;;
+                *) player_function="vlc" ;;
+            esac
+            ;;
+        -s | --syncplay)
+            case "$(uname -s)" in
+                Darwin*) player_function="/Applications/Syncplay.app/Contents/MacOS/syncplay" ;;
+                MINGW* | *Msys)
+                    export PATH="$PATH":"/c/Program Files (x86)/Syncplay/"
+                    player_function="syncplay.exe"
+                    ;;
+                *) player_function="syncplay" ;;
+            esac
+            ;;
+        -q | --quality)
+            [ $# -lt 2 ] && die "missing argument!"
+            quality="$2"
+            shift
+            ;;
+        -p | --provider)
+            [ $# -lt 2 ] && die "missing argument!"
+            provider="$2"
+            shift
+            ;;
+        -S | --select-nth)
+            [ $# -lt 2 ] && die "missing argument!"
+            index="$2"
+            shift
+            ;;
+        -c | --continue) search=history ;;
+        --resume) resume_enabled=1 ;;
+        --batch)
+            [ "$player_function" = "iSH" ] && iSH_DownFix="--async-dns=false"
+            player_function=download
+            batch_mode=1
+            ;;
+        -d | --download)
+            [ "$player_function" = "iSH" ] && iSH_DownFix="--async-dns=false"
+            player_function=download
+            ;;
+        -D | --delete)
+            : >"$histfile"
+            exit 0
+            ;;
+        -l | --logview)
+            case "$(uname -s)" in
+                Darwin*) log show --predicate 'process == "logger"' ;;
+                Linux*) journalctl -t koto-cli ;;
+                *) die "Logger not implemented for your platform" ;;
+            esac
+            exit 0
+            ;;
+        -V | --version) version_info ;;
+        -h | --help) help_info ;;
+        -e | --episode | -r | --range)
+            [ $# -lt 2 ] && die "missing argument!"
+            ep_no="$2"
+            shift
+            ;;
+        --dub) mode="dub" ;;
+        --no-detach) no_detach=1 ;;
+        --exit-after-play) exit_after_play=1 && no_detach=1 ;;
+        --rofi) menu_program=rofi ;;
+        --dmenu) menu_program=dmenu ;;
+        --skip) skip_intro=1 ;;
+        -N | --nextep-countdown) search=nextep ;;
+        -U | --update)
+            dep_ch "patch"
+            branch="${2:-$branch}"
+            update_script
+            ;;
+        *) query="$(printf "%s" "$query $1" | sed "s|^ ||;s| |+|g")" ;;
+    esac
+    shift
+done
+[ "$menu_program" = "fzf" ] && menu_multi_flag="-m"
+[ "$menu_program" = "rofi" ] && menu_multi_flag="-multi-select"
+
+case "$provider" in
+    anikoto) ;;
+    *) die "Unknown provider: $provider (supported: anikoto)" ;;
+esac
+
+info "Using provider: $provider"
+
+info "Checking dependencies..."
+dep_ch "curl"
+dep_ch "sed"
+dep_ch "grep"
+[ "$skip_intro" = 1 ] && dep_ch "ani-skip"
+dep_ch "$menu_program"
+case "$player_function" in
+    debug) ;;
+    download) dep_ch_failover "yt-dlp,ffmpeg" >/dev/null || die 'Neither yt-dlp nor ffmpeg found' ;;
+    android*) printf "\33[2K\rChecking of players on Android is disabled.\n" ;;
+    *iSH*) printf "\33[2K\rChecking of players on iOS is disabled\n" ;;
+    mpv|flatpak_mpv) dep_ch "socat" ;;
+    *) dep_ch "$player_function" ;;
+esac
+
+trap 'cleanup; exit 1' INT HUP TERM
+trap 'cleanup' EXIT
+
+# searching
+case "$search" in
+    history)
+        backup_old_hist
+        anime_list=$(while read -r ep_no id title _pos; do process_hist_entry & done <"$histfile")
+        wait
+        [ -z "$anime_list" ] && die "No unwatched series in history!"
+        [ -z "${index##*[!0-9]*}" ] && id=$(printf "%s" "$anime_list" | nl -w 2 | sed 's/^[[:space:]]//' | nth "Select anime: " | cut -f1)
+        [ -z "${index##*[!0-9]*}" ] || id=$(printf "%s" "$anime_list" | sed -n "${index}p" | cut -f1)
+        [ -z "$id" ] && exit 1
+        title=$(printf "%s" "$anime_list" | grep "$id" | cut -f2 | sed 's/ - episode.*//')
+        ep_list=$(episodes_list_anikoto "$id")
+        ep_no=$(printf "%s" "$anime_list" | grep "$id" | cut -f2 | sed -nE 's/.*- episode (.+)$/\1/p')
+        anime_title="$(printf "%s" "$title" | cut -d'(' -f1 | tr -d '[:punct:]')"
+        anikoto_desc "$id" || true
+        printf "%s" "$anime_list" | grep "$id" | cut -f2 | grep -q "(up to date)" && time_until_next_ep "$anime_title"
+        ;;
+    *)
+        if [ "$menu_program" = "fzf" ]; then
+            while [ -z "$query" ]; do
+                printf "\33[2K\r\033[1;36mSearch anime: \033[0m" && read -r query
+            done
+        else
+            [ -z "$query" ] && query=$(: | menu "Search anime: " "" "$menu_extra_flags")
+            [ -z "$query" ] && exit 1
+        fi
+        # for checking new releases by specifying anime name
+        [ "$search" = "nextep" ] && time_until_next_ep "$query"
+
+        query=$(printf "%s" "$query" | sed "s| |+|g")
+
+        anime_list=$(search_anikoto "$query")
+        [ -z "$anime_list" ] && die "No results found!"
+        # check if select-nth index is a valid number, if so skip interactive selection
+        [ "$index" -eq "$index" ] 2>/dev/null && result=$(printf "%s" "$anime_list" | sed -n "${index}p")
+        [ -z "$index" ] && result=$(printf "%s" "$anime_list" | nl -w 2 | sed 's/^[[:space:]]//' | nth "Select anime: ")
+        [ -z "$result" ] && die "Invalid/No Anime Selection"
+        title="$(printf "%s" "$result" | cut -f2)"
+        anime_title="$(printf "%s" "$title" | cut -d'(' -f1 | tr -d '[:punct:]')"
+        id="$(printf "%s" "$result" | cut -f1)"
+        anikoto_desc "$(printf "%s" "$result" | cut -f1)" || true
+        ep_list=$(episodes_list_anikoto "$id")
+        [ -z "$ep_list" ] && die "Could not fetch episodes for \"$title\" - it may be unavailable on anikototv.to, try another result"
+        [ -n "$ep_no" ] && [ "$ep_no" -ne -1 ] && ! printf "%s" "$ep_list" | grep -q "^$ep_no$" && die "Invalid Episode Selection"
+        [ -z "$ep_no" ] && ep_no=$(printf "%s" "$ep_list" | nth "Select episode: " "$menu_multi_flag")
+        [ -z "$ep_no" ] && die "Invalid/No Episode Selection"
+        ;;
+esac
+
+# moves the cursor up one line and clears that line
+tput cuu1 && tput el
+# stores the position of cursor
+tput sc
+
+# playback & loop
+play
+[ "$player_function" = "download" ] && exit 0
+[ "$player_function" = "debug" ] && exit 0
+
+while cmd=$(printf 'next\nreplay\nprevious\nselect%s\nchange_quality\nquit' "$seasons_option" | nth "Playing episode $ep_no of $title... "); do
+    # save playback position before acting on the menu choice
+    if [ "$menu_program" = "fzf" ]; then
+        case "$player_function" in
+            mpv*|flatpak_mpv) update_history "$(get_mpv_position)" ;;
+        esac
+    fi
+    case "$cmd" in
+        next) ep_no=$(printf "%s" "$ep_list" | sed -n "/^${ep_no}$/{n;p;}") 2>/dev/null ;;
+        replay) episode="$replay" ;;
+        previous) ep_no=$(printf "%s" "$ep_list" | sed -n "/^${ep_no}$/{g;1!p;};h") 2>/dev/null ;;
+        select) ep_no=$(printf "%s" "$ep_list" | nth "Select episode: " "$menu_multi_flag") ;;
+        seasons)
+            new_anime="$(printf "%s" "$seasons" | nl -w 2 | sed 's/^[[:space:]]//' | nth "Select anime: ")"
+            [ -z "$new_anime" ] && die "Invalid/No Anime Selection"
+            title="$(printf "%s" "$new_anime" | cut -f2)"
+            anime_title="$(printf "%s" "$title" | cut -d'(' -f1 | tr -d '[:punct:]')"
+            id="$(printf "%s" "$new_anime" | cut -f1)"
+            ep_list=$(episodes_list_anikoto "$id")
+            ep_no=$(printf "%s" "$ep_list" | nth "Select episode: " "$menu_multi_flag")
+            [ -z "$ep_no" ] && die "Invalid/No Episode Selection"
+            ;;
+        change_quality)
+            new_quality="$(printf "%s" "$links" | menu | cut -d">" -f1)"
+            [ -z "$new_quality" ] && die "No quality selected"
+            select_quality "$new_quality"
+            ;;
+        *)
+            cleanup
+            exit 0
+            ;;
+    esac
+    [ -z "$ep_no" ] && die "Out of range"
+    play
+done
+
+# koto-cli
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <http://www.gnu.org/licenses/>.
+#
+# Project repository: https://github.com/VVAT3R/koto-cli
