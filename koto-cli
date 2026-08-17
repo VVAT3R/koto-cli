@@ -184,7 +184,7 @@ select_quality() {
         if [ -n "$anikoto_feed_pid" ] && [ "$anikoto_feed_variant" != "$episode" ]; then
             anikoto_feed_cleanup
         fi
-        [ -z "$anikoto_feed_pid" ] && start_anikoto_fifo "$episode"
+        [ -z "$anikoto_feed_pid" ] && start_anikoto_fifo "$episode" || { warn "Failed to prepare local feed for stream"; episode=""; return 1; }
         anikoto_feed_variant="$episode"
         episode="$anikoto_feed_m3u8"
     fi
@@ -1030,6 +1030,7 @@ while cmd=$(printf 'next\nreplay\nprevious\nselect\nchange_quality\nseasons\nqui
             new_quality="$(printf "%s" "$links" | menu "Select quality: " "" "$menu_extra_flags" | cut -d">" -f1)"
             [ -z "$new_quality" ] && die "No quality selected"
             select_quality "$new_quality"
+            [ -z "$episode" ] && die "No valid sources found for quality"
             ;;
         *)
             cleanup
