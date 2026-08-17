@@ -427,10 +427,10 @@ anikoto_feed_stream() {
         [ "$_skip_first" = 1 ] && [ "$_ln" -eq 1 ] && continue
         [ -z "$_url" ] && continue
         if [ -p "$_dir/seg${_i}.ts" ]; then
-            curl -sL -m 60 -A "$agent" -e "${anikoto_referer}/" "$_url" \
+            curl -sL -m 120 -A "$agent" -e "${anikoto_referer}/" "$_url" \
                 | tail -c +$((_off + 1)) > "$_dir/seg${_i}.ts"
         else
-            curl -sL -m 60 -A "$agent" -e "${anikoto_referer}/" "$_url" \
+            curl -sL -m 120 -A "$agent" -e "${anikoto_referer}/" "$_url" \
                 | tail -c +$((_off + 1)) > "$_dir/seg${_i}.ts.part"
             mv "$_dir/seg${_i}.ts.part" "$_dir/seg${_i}.ts"
         fi
@@ -501,9 +501,9 @@ start_anikoto_fifo() {
     if [ "$anikoto_feed_fifo" != 1 ]; then
         _n=0
         _waits=0
-        while [ "$_waits" -lt 60 ]; do
+        while [ "$_waits" -lt 120 ]; do
             while [ -f "$anikoto_feed_dir/seg$_n.ts" ]; do _n=$((_n + 1)); done
-            [ "$_n" -ge 3 ] && break
+            [ "$_n" -ge 5 ] && break
             sleep 1
             _waits=$((_waits + 1))
         done
@@ -674,7 +674,7 @@ play_episode() {
             # cache by default; enable it so the buffer bar shows and mpv reads
             # ahead (which also lets it seek into already-downloaded segments)
             if [ -n "$anikoto_feed_m3u8" ]; then
-                _mpv_args="$_mpv_args --cache=yes --demuxer-max-bytes=512MiB --demuxer-max-back-bytes=256MiB"
+                _mpv_args="$_mpv_args --cache=yes --demuxer-max-bytes=1GiB --demuxer-max-back-bytes=512MiB --cache-secs=60 --demuxer-readahead-secs=60"
             fi
             if [ "$no_detach" = 0 ]; then
                 nohup $player_function $_mpv_args $skip_flag --tls-verify=no --force-media-title="${anime_title} Episode ${ep_no}" "$episode" $refr_flag $player_extra_flags >/dev/null 2>&1 &
