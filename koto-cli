@@ -317,8 +317,8 @@ get_anikoto_m3u8() {
     if [ "$mode" = "dub" ]; then
         _link_types="dub"
     else
-        # try hsub first, fall back to sub/softsub if unavailable
-        _link_types="hsub sub softsub"
+        # hard-subbed servers (hsub)
+        _link_types="hsub"
     fi
     _servers="$(anikoto_curl "${provider_base}/ajax/server/list?servers=${_ids}")"
     _links="$(anikoto_server_links "$_servers" "$_link_types")"
@@ -334,7 +334,7 @@ get_anikoto_m3u8() {
             [ -n "$_links" ] && break
         done
     fi
-    [ -z "$_links" ] && warn "No compatible servers found (need hsub/sub/dub)" && return 1
+    [ -z "$_links" ] && warn "No compatible servers found (need hsub or dub)" && return 1
     # resolve every server's embed URL up front (parallel) and try direct-playable hosts first
     _direct_urls=""
     _proxied_urls=""
