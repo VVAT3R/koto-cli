@@ -296,7 +296,7 @@ anikoto_server_links() {
             | grep "data-type=\"${_t}\"" \
             | grep -oE 'data-link-id="[^"]*"' | cut -d'"' -f2)"
         for _lid in $_found; do
-            _all="$_all $_lid"
+            _all="$_all $_t:$_lid"
         done
     done
     printf '%s' "$_all"
@@ -341,25 +341,31 @@ get_anikoto_m3u8() {
     _resolve_tmp="$(mktemp -d)"
     _resolve_i=0
     for _link in $_links; do
-        (anikoto_curl "${provider_base}/ajax/server?get=${_link}" > "$_resolve_tmp/$_resolve_i" 2>/dev/null) &
+        _lid="${_link#*:}"
+        _ltype="${_link%%:*}"
+        (anikoto_curl "${provider_base}/ajax/server?get=${_lid}" > "$_resolve_tmp/$_resolve_i" 2>/dev/null
+         printf '%s' "$_ltype" > "$_resolve_tmp/$_resolve_i.type") &
         _resolve_i=$((_resolve_i + 1))
     done
     wait
     _resolve_idx=0
     while [ "$_resolve_idx" -lt "$_resolve_i" ]; do
         _embed="$(cat "$_resolve_tmp/$_resolve_idx" 2>/dev/null)"
+        _rtype="$(cat "$_resolve_tmp/$_resolve_idx.type" 2>/dev/null)"
         _embed_url="$(printf '%s' "$_embed" | sed -nE 's|.*"url": *"([^"]*)".*|\1|p' | sed 's|\\/|/|g')"
         if [ -n "$_embed_url" ]; then
             case "$_embed_url" in
-                *vidtube*|*akirax*) _direct_urls="$_direct_urls $_embed_url" ;;
-                *) _proxied_urls="$_proxied_urls $_embed_url" ;;
+                *vidtube*|*akirax*) _direct_urls="$_direct_urls $_rtype:$_embed_url" ;;
+                *) _proxied_urls="$_proxied_urls $_rtype:$_embed_url" ;;
             esac
         fi
         _resolve_idx=$((_resolve_idx + 1))
     done
     rm -rf "$_resolve_tmp"
-    for _embed_url in $_direct_urls $_proxied_urls; do
-        [ -z "$_embed_url" ] && continue
+    for _entry in $_direct_urls $_proxied_urls; do
+        [ -z "$_entry" ] && continue
+        _rtype="${_entry%%:*}"
+        _embed_url="${_entry#*:}"
         _embed_page="$(anikoto_curl_raw -e "${provider_base}/" "$_embed_url")"
         [ -z "$_embed_page" ] && continue
         # try multiple player patterns — different hosts use different structures
@@ -368,7 +374,7 @@ get_anikoto_m3u8() {
         [ -z "$_file_id" ] && _file_id="$(printf '%s' "$_embed_page" | grep -oE 'data-id="[0-9]+"' | head -1 | grep -oE '[0-9]+')"
         [ -z "$_file_id" ] && continue
         _host="$(printf '%s' "$_embed_url" | sed -E 's|^(https?://[^/]+).*|\1|')"
-        _src="$(anikoto_curl "${_host}/stream/getSources?id=${_file_id}&type=${_link_types%% *}")"
+        _src="$(anikoto_curl "${_host}/stream/getSources?id=${_file_id}&type=${_rtype}")"
         [ -z "$_src" ] && continue
         _m3u8="$(printf '%s' "$_src" | sed -nE 's|.*"sources":\{?"file":"([^"]*)".*|\1|p' | sed 's|\\/|/|g')"
         [ -z "$_m3u8" ] && _m3u8="$(printf '%s' "$_src" | sed -nE 's|.*"file":"([^"]*\.m3u8[^"]*)".*|\1|p' | sed 's|\\/|/|g')"
