@@ -395,17 +395,6 @@ anikoto_feed_dir=""
 anikoto_feed_m3u8=""
 anikoto_feed_variant=""
 anikoto_feed_fifo=0
-# finds where the real MPEG-TS stream starts inside an obfuscated segment:
-# 4 sync bytes (0x47 = 71) spaced 188 bytes apart, prints the 0-based offset
-detect_ts_offset() {
-    od -An -v -t u1 "$1" 2>/dev/null | tr -s '[:space:]' '\n' | awk '
-        NF { b[n++] = $1 }
-        END {
-            for (o = 0; o + 564 < n; o++) {
-                if (b[o] == 71 && b[o + 188] == 71 && b[o + 376] == 71 && b[o + 564] == 71) { print o; exit }
-            }
-        }'
-}
 
 # background feeder: downloads each obfuscated segment, strips the junk prefix
 # and writes clean MPEG-TS so the player can read it (pure POSIX shell).
@@ -416,18 +405,8 @@ anikoto_feed_stream() {
     _dir="$1"
     _off="$2"
     _i=0
-    _skip_first=0
-    if [ -s "$_dir/probe.raw" ]; then
-        tail -c +$((_off + 1)) "$_dir/probe.raw" > "$_dir/seg0.ts"
-        rm -f "$_dir/probe.raw"
-        _i=1
-        _skip_first=1
-    fi
     _urls=""
-    _ln=0
     while IFS= read -r _u; do
-        _ln=$((_ln + 1))
-        [ "$_skip_first" = 1 ] && [ "$_ln" -eq 1 ] && continue
         [ -n "$_u" ] && _urls="$_urls $_u"
     done < "$_dir/segments.txt"
     set -- $_urls
@@ -476,26 +455,11 @@ start_anikoto_fifo() {
         esac
     done > "$anikoto_feed_dir/playlist.m3u8"
 
-    # auto-detect the junk offset from the first segment; the background feeder
-    # feeds seg0 from this probe and streams the rest (writing into a FIFO
-    # before the player opens it would block, so that must happen in background)
-    _off=252
-    _first="$(head -n1 "$anikoto_feed_dir/segments.txt")"
-    if [ -n "$_first" ]; then
-        curl -sL -m 60 -A "$agent" -e "${anikoto_referer}/" "$_first" > "$anikoto_feed_dir/probe.raw"
-        if [ -s "$anikoto_feed_dir/probe.raw" ]; then
-            _detected="$(detect_ts_offset "$anikoto_feed_dir/probe.raw")"
-            # a detected offset of 0 means the segment is already clean MPEG-TS,
-            # so nothing should be stripped (only keep 252 when detection fails)
-            [ -n "$_detected" ] && _off="$_detected"
-        else
-            rm -f "$anikoto_feed_dir/probe.raw"
-        fi
-    fi
     [ ! -s "$anikoto_feed_dir/segments.txt" ] \
         && { warn "No segments in HLS playlist for stream"; rm -rf "$anikoto_feed_dir"; anikoto_feed_dir=""; return 1; }
 
     anikoto_feed_m3u8="$anikoto_feed_dir/playlist.m3u8"
+    _off=252
     _pidfile="$anikoto_feed_dir/feed.pid"
     # daemonize (orphan it) so the shell's `wait` doesn't block on it
     (anikoto_feed_stream "$anikoto_feed_dir" "$_off" &
