@@ -161,7 +161,6 @@ where_mpv() {
 }
 
 cleanup() {
-    discord_rpc_clear
     tput sgr0               # clears colors
     rm -f "${histfile}.new" # remove temp logfile
     anikoto_feed_cleanup
@@ -597,65 +596,6 @@ resume_episode() {
     printf "%.0f" "$_pos"
 }
 
-# Discord Rich Presence — shows what you're watching in your Discord activity.
-# Requires KOTO_CLI_DISCORD_CLIENT_ID to be set (create an app at
-# https://discord.com/developers/applications to get one).
-discord_rpc_frame() {
-    _opcode="$1"
-    _payload="$2"
-    _len=$(printf '%s' "$_payload" | wc -c | tr -d ' ')
-    _header=""
-    _i=0
-    while [ "$_i" -lt 4 ]; do
-        _byte=$((_opcode % 256))
-        _header="$_header$(printf '\\%03o' "$_byte")"
-        _opcode=$((_opcode / 256))
-        _i=$((_i + 1))
-    done
-    _i=0
-    while [ "$_i" -lt 4 ]; do
-        _byte=$((_len % 256))
-        _header="$_header$(printf '\\%03o' "$_byte")"
-        _len=$((_len / 256))
-        _i=$((_i + 1))
-    done
-    printf "${_header}%s" "$_payload"
-}
-
-# find the Discord IPC socket — location varies by system
-_discord_find_ipc() {
-    for _p in "${XDG_RUNTIME_DIR:-}/discord-ipc-0" "/tmp/discord-ipc-0" "${TMPDIR:-}/discord-ipc-0"; do
-        [ -S "$_p" ] && printf '%s' "$_p" && return 0
-    done
-    return 1
-}
-
-discord_rpc_handshake() {
-    [ -z "$KOTO_CLI_DISCORD_CLIENT_ID" ] && return 1
-    _ipc="$(_discord_find_ipc)" || return 1
-    _hs=$(discord_rpc_frame 0 "{\"v\":1,\"client_id\":\"${KOTO_CLI_DISCORD_CLIENT_ID}\"}")
-    printf '%s' "$_hs" | socat - UNIX-CONNECT:"$_ipc" >/dev/null 2>&1
-    sleep 1
-}
-
-discord_rpc_activity() {
-    [ -z "$KOTO_CLI_DISCORD_CLIENT_ID" ] && return 1
-    _ipc="$(_discord_find_ipc)" || return 1
-    _title="$1"
-    _episode="$2"
-    _safe_title=$(printf '%s' "$_title" | sed 's/["\\]/\\&/g')
-    _payload="{\"cmd\":\"SET_ACTIVITY\",\"args\":{\"activity\":{\"state\":\"Episode ${_episode}\",\"details\":\"${_safe_title}\",\"instance\":true}},\"nonce\":\"$(date +%s)\"}"
-    _frame=$(discord_rpc_frame 1 "$_payload")
-    printf '%s' "$_frame" | socat - UNIX-CONNECT:"$_ipc" >/dev/null 2>&1
-}
-
-discord_rpc_clear() {
-    [ -z "$KOTO_CLI_DISCORD_CLIENT_ID" ] && return 1
-    _ipc="$(_discord_find_ipc)" || return 1
-    _frame=$(discord_rpc_frame 1 '{"cmd":"SET_ACTIVITY","args":{"activity":null},"nonce":"clear"}')
-    printf '%s' "$_frame" | socat - UNIX-CONNECT:"$_ipc" >/dev/null 2>&1
-}
-
 download() {
     _dl_refr="${refr_flag#--referrer=}"
     case $1 in
@@ -685,9 +625,6 @@ play_episode() {
     [ "$log_episode" = 1 ] && [ "$player_function" != "debug" ] && [ "$player_function" != "download" ] && command -v logger >/dev/null && logger -t koto-cli "${anime_title}${ep_no}"
     [ "$skip_intro" = 1 ] && skip_flag="$(ani-skip -q "$mal_id" -e "$canon_ep_no")"
     [ -z "$episode" ] && get_episode_url
-
-    # Discord Rich Presence — handshake on first play
-    [ -z "$_discord_ready" ] && discord_rpc_handshake && _discord_ready=1
 
     # wait for the previous player to close before starting a new one
     wait 2>/dev/null
@@ -771,9 +708,6 @@ play_episode() {
     esac
     replay="$episode"
     unset episode
-
-    # Discord Rich Presence — show what's playing
-    discord_rpc_activity "$anime_title" "$ep_no"
 
     # save playback position
     case "$player_function" in
