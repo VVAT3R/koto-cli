@@ -622,10 +622,17 @@ discord_rpc_frame() {
     printf "${_header}%s" "$_payload"
 }
 
+# find the Discord IPC socket — location varies by system
+_discord_find_ipc() {
+    for _p in "${XDG_RUNTIME_DIR:-}/discord-ipc-0" "/tmp/discord-ipc-0" "${TMPDIR:-}/discord-ipc-0"; do
+        [ -S "$_p" ] && printf '%s' "$_p" && return 0
+    done
+    return 1
+}
+
 discord_rpc_handshake() {
     [ -z "$KOTO_CLI_DISCORD_CLIENT_ID" ] && return 1
-    _ipc="/tmp/discord-ipc-0"
-    [ ! -S "$_ipc" ] && return 1
+    _ipc="$(_discord_find_ipc)" || return 1
     _hs=$(discord_rpc_frame 0 "{\"v\":1,\"client_id\":\"${KOTO_CLI_DISCORD_CLIENT_ID}\"}")
     printf '%s' "$_hs" | socat - UNIX-CONNECT:"$_ipc" >/dev/null 2>&1
     sleep 1
@@ -633,8 +640,7 @@ discord_rpc_handshake() {
 
 discord_rpc_activity() {
     [ -z "$KOTO_CLI_DISCORD_CLIENT_ID" ] && return 1
-    _ipc="/tmp/discord-ipc-0"
-    [ ! -S "$_ipc" ] && return 1
+    _ipc="$(_discord_find_ipc)" || return 1
     _title="$1"
     _episode="$2"
     _safe_title=$(printf '%s' "$_title" | sed 's/["\\]/\\&/g')
@@ -645,8 +651,7 @@ discord_rpc_activity() {
 
 discord_rpc_clear() {
     [ -z "$KOTO_CLI_DISCORD_CLIENT_ID" ] && return 1
-    _ipc="/tmp/discord-ipc-0"
-    [ ! -S "$_ipc" ] && return 1
+    _ipc="$(_discord_find_ipc)" || return 1
     _frame=$(discord_rpc_frame 1 '{"cmd":"SET_ACTIVITY","args":{"activity":null},"nonce":"clear"}')
     printf '%s' "$_frame" | socat - UNIX-CONNECT:"$_ipc" >/dev/null 2>&1
 }
