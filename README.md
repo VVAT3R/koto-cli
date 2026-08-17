@@ -47,6 +47,23 @@ koto-cli started as a fork of ani-cli whose provider missed some anime I wanted 
 
 The pipeline: search the site's AJAX endpoints → extract anime ID and episode list → resolve hsub/sub/soft-server/dub servers → grab `.m3u8` streams from megaplay embeds → auto-detect and strip obfuscated segment prefixes → feed clean MPEG-TS to the player.
 
+### How anikoto scraping works
+
+koto-cli scrapes **anikototv.to** by following these steps:
+
+1. **Search** — Queries the AJAX search endpoint and extracts anime slugs and titles from the HTML response.
+2. **Anime ID** — Fetches the watch page for a slug and extracts the numeric ID from the `data-id` attribute.
+3. **Episode list** — Fetches the episode list via AJAX. Each episode entry has a `data-num` (episode number) and `data-ids` (server group ID).
+4. **Server list** — Uses the server group ID to fetch available servers. Each server has a **type** (`hsub`, `sub`, `soft-server`, or `dub`) and a **link ID**.
+5. **Server type priority** — Servers are tried in order depending on the mode:
+   - **Sub mode** (default): `hsub` → `sub` → `soft-server`
+   - **Dub mode** (`--dub`): `dub` only
+
+   Not all server types are available for every anime — it depends on what anikototv.to has uploaded. If `hsub` isn't available for a particular anime, koto-cli falls back to `sub`, then `soft-server`. This is normal site behavior, not a bug.
+6. **Embed resolution** — Each link ID is resolved to an embed URL (e.g. megaplay, vidtube, akirax). The embed page is parsed for a player element with a `data-id` attribute.
+7. **Stream extraction** — The file ID is sent to the embed host's `getSources` API along with the server type. The API returns an `.m3u8` HLS stream URL.
+8. **Playback** — Direct hosts (vidtube, akirax) stream straight to mpv. Obfuscated hosts (megaplay etc.) go through a local feed that strips the junk prefix from each segment and writes clean MPEG-TS files for mpv to read.
+
 ### Usage
 
 ```sh
