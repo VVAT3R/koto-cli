@@ -409,10 +409,9 @@ detect_ts_offset() {
 
 # background feeder: downloads each obfuscated segment, strips the junk prefix
 # and writes clean MPEG-TS so the player can read it (pure POSIX shell, no
-# python3). segments are named pipes during download (flow control, so the
-# downloader can't outrun the network) and regular files during playback
-# (written via .part + atomic mv so a partial segment is never visible, which
-# lets mpv re-open segments for backward seeking)
+# python3). downloads run 3 at a time for throughput; each segment is written
+# via .part + atomic mv so a partial segment is never visible, which lets mpv
+# re-open segments for backward seeking
 anikoto_feed_stream() {
     _dir="$1"
     _off="$2"
@@ -422,32 +421,33 @@ anikoto_feed_stream() {
         tail -c +$((_off + 1)) "$_dir/probe.raw" > "$_dir/seg0.ts"
         rm -f "$_dir/probe.raw"
         _i=1
-        # seg0.ts was already written from the probe, so don't re-download the
-        # first entry of segments.txt (that would shift every segment by one
-        # and break seeking in the player)
         _skip_first=1
     fi
+    _urls=""
     _ln=0
-    while IFS= read -r _url; do
+    while IFS= read -r _u; do
         _ln=$((_ln + 1))
         [ "$_skip_first" = 1 ] && [ "$_ln" -eq 1 ] && continue
-        [ -z "$_url" ] && continue
-        _seg_retries=3
-        while [ "$_seg_retries" -gt 0 ]; do
-            if [ -p "$_dir/seg${_i}.ts" ]; then
-                curl -sL -m 60 -A "$agent" -e "${anikoto_referer}/" "$_url" \
-                    | tail -c +$((_off + 1)) > "$_dir/seg${_i}.ts"
-            else
-                curl -sL -m 60 -A "$agent" -e "${anikoto_referer}/" "$_url" \
-                    | tail -c +$((_off + 1)) > "$_dir/seg${_i}.ts.part"
-                mv "$_dir/seg${_i}.ts.part" "$_dir/seg${_i}.ts"
-            fi
-            [ -s "$_dir/seg${_i}.ts" ] && break
-            _seg_retries=$((_seg_retries - 1))
-            [ "$_seg_retries" -gt 0 ] && sleep 2
-        done
-        _i=$((_i + 1))
+        [ -n "$_u" ] && _urls="$_urls $_u"
     done < "$_dir/segments.txt"
+    set -- $_urls
+    while [ $# -gt 0 ]; do
+        _batch=0
+        while [ "$_batch" -lt 3 ] && [ $# -gt 0 ]; do
+            _curl_url="$1"; shift
+            (curl -sL --max-time 60 -A "$agent" -e "${anikoto_referer}/" "$_curl_url" \
+                | tail -c +$((_off + 1)) > "$_dir/seg${_i}.ts.part") &
+            _batch=$((_batch + 1))
+            _i=$((_i + 1))
+        done
+        wait
+        _j=0
+        while [ "$_j" -lt "$_batch" ]; do
+            _si=$((_i - _batch + _j))
+            [ -s "$_dir/seg${_si}.ts.part" ] && mv "$_dir/seg${_si}.ts.part" "$_dir/seg${_si}.ts"
+            _j=$((_j + 1))
+        done
+    done
 }
 
 # builds a local m3u8 + segment cache for an obfuscated variant stream and
