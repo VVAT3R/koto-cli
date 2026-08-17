@@ -16,12 +16,15 @@
 ---
 
 A standalone POSIX shell script to browse, search and watch anime from the command-line, inspired by [pystardust/ani-cli](https://github.com/pystardust/ani-cli). It scrapes **anikototv.to** for direct HLS streams — no crypto dependencies.
+
 ### Quick start
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/VVAT3R/koto-cli/main/install.sh | sudo sh
 ```
-### Features
+
+<details>
+<summary>Features</summary>
 
 - **anikoto** source — direct `.m3u8` streams, no crypto dependencies
 - Hard-sub (hsub), sub, soft-server and dubbed playback
@@ -36,18 +39,27 @@ curl -fsSL https://raw.githubusercontent.com/VVAT3R/koto-cli/main/install.sh | s
 - Next-episode countdown (`-N`)
 - Install & uninstall scripts included
 
-### Notes on episode availability
+</details>
+
+<details>
+<summary>Notes on episode availability</summary>
 
 - **Episode not yet uploaded**: If the latest episode of an airing anime has been released but koto-cli shows it as unavailable, it means anikototv.to has not yet added it to their database. Try again later.
 - **No valid sources**: If the episode exists on anikoto but koto-cli fails to play it, none of the supported servers (hsub, sub, soft-server, dub) are available for that episode.
 
-### How koto-cli came to be
+</details>
+
+<details>
+<summary>How koto-cli came to be</summary>
 
 koto-cli started as a fork of ani-cli whose provider missed some anime I wanted to watch. I reverse-engineered [anikototv.to](https://anikototv.to) and built an **anikoto** provider, then spun it out into this standalone repo. Everything runs in plain POSIX shell — no API keys, no crypto, no external dependencies.
 
 The pipeline: search the site's AJAX endpoints → extract anime ID and episode list → resolve hsub/sub/soft-server/dub servers → grab `.m3u8` streams from megaplay embeds → auto-detect and strip obfuscated segment prefixes → feed clean MPEG-TS to the player.
 
-### How anikoto scraping works
+</details>
+
+<details>
+<summary>How anikoto scraping works</summary>
 
 koto-cli scrapes **anikototv.to** by following these steps:
 
@@ -64,10 +76,15 @@ koto-cli scrapes **anikototv.to** by following these steps:
 7. **Stream extraction** — The file ID is sent to the embed host's `getSources` API along with the server type. The API returns an `.m3u8` HLS stream URL.
 8. **Playback** — Direct hosts (vidtube, akirax) stream straight to mpv. Obfuscated hosts (megaplay etc.) go through a local feed that strips the junk prefix from each segment and writes clean MPEG-TS files for mpv to read.
 
-### Usage
+</details>
+
+<details>
+<summary>Usage</summary>
 
 ```sh
 koto-cli [options] [query]
 ```
 
 Run `koto-cli -h` for the full list of options.
+
+</details>
