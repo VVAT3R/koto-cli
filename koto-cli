@@ -1,6 +1,6 @@
 #!/bin/sh
 
-version_number="1.0.1"
+version_number="1.1.0"
 
 # UI
 
@@ -511,9 +511,9 @@ get_episode_url() {
 
     select_quality "$quality"
     if printf "%s" "$ep_list" | grep -q "^$ep_no$"; then
-        [ -z "$episode" ] && die "Episode is released, but no valid sources!"
+        [ -z "$episode" ] && die "No valid sources found for episode $ep_no"
     else
-        [ -z "$episode" ] && die "Episode not released!"
+        [ -z "$episode" ] && die "Episode $ep_no is not available yet"
     fi
 }
 
@@ -528,7 +528,6 @@ time_until_next_ep() {
         ! (printf "%s\n" "$data" | grep -q "Next Raw Release:") && status="Finished" && color="32"
         printf "Status:  \033[1;%sm%s\033[0m\n---\n" "$color" "$status"
     done
-    exit 0
 }
 
 # PLAYING
@@ -919,7 +918,7 @@ case "$search" in
         ep_no=$(printf "%s" "$anime_list" | grep "$id" | cut -f2 | sed -nE 's/.*- episode (.+)$/\1/p')
         anime_title="$(printf "%s" "$title" | cut -d'(' -f1 | tr -d '[:punct:]')"
         anikoto_desc "$id" || true
-        printf "%s" "$anime_list" | grep "$id" | cut -f2 | grep -q "(up to date)" && time_until_next_ep "$anime_title"
+        printf "%s" "$anime_list" | grep "$id" | cut -f2 | grep -q "(up to date)" && time_until_next_ep "$anime_title" && exit 0
         ;;
     *)
         if [ "$menu_program" = "fzf" ]; then
@@ -931,7 +930,7 @@ case "$search" in
             [ -z "$query" ] && exit 1
         fi
         # for checking new releases by specifying anime name
-        [ "$search" = "nextep" ] && time_until_next_ep "$query"
+        [ "$search" = "nextep" ] && time_until_next_ep "$query" && exit 0
 
         query=$(printf "%s" "$query" | sed "s| |+|g")
 
@@ -947,7 +946,16 @@ case "$search" in
         anikoto_desc "$id" || true
         ep_list=$(episodes_list_anikoto "$id")
         [ -z "$ep_list" ] && die "Could not fetch episodes for \"$title\" - it may be unavailable on anikototv.to, try another result"
-        [ -n "$ep_no" ] && [ "$ep_no" != "-1" ] && ! printf "%s" "$ep_list" | grep -q "^$ep_no$" && die "Invalid Episode Selection"
+        if [ -n "$ep_no" ] && [ "$ep_no" != "-1" ] && ! printf "%s" "$ep_list" | grep -q "^$ep_no$"; then
+            _latest_ep=$(printf "%s\n" "$ep_list" | tail -n1)
+            if [ "$(printf '%s\n%s' "$_latest_ep" "$ep_no" | sort -n | tail -n1)" = "$ep_no" ] && [ "$_latest_ep" != "$ep_no" ]; then
+                info "\"$title\" is still airing. Next episode not yet released."
+                time_until_next_ep "$anime_title"
+                exit 0
+            else
+                die "Invalid Episode Selection"
+            fi
+        fi
         [ -z "$ep_no" ] && ep_no=$(printf "%s" "$ep_list" | nth "Select episode: " "$menu_multi_flag")
         [ -z "$ep_no" ] && die "Invalid/No Episode Selection"
         ;;
