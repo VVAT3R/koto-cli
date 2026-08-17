@@ -401,34 +401,69 @@ anikoto_feed_fifo=0
 
 # background feeder: downloads each obfuscated segment, strips the junk prefix
 # and writes clean MPEG-TS so the player can read it (pure POSIX shell).
-# downloads run 3 at a time for throughput; each segment is written
-# via .part + atomic mv so a partial segment is never visible, which lets mpv
-# re-open segments for backward seeking
+# a sliding window keeps up to 3 downloads active at all times — when one
+# finishes the next starts immediately so mpv always has fresh data to read;
+# each segment is written via .part + atomic mv so a partial segment is never
+# visible, which lets mpv re-open segments for backward seeking
 anikoto_feed_stream() {
     _dir="$1"
     _off="$2"
+    _max=3
     _i=0
     _urls=""
     while IFS= read -r _u; do
         [ -n "$_u" ] && _urls="$_urls $_u"
     done < "$_dir/segments.txt"
     set -- $_urls
-    while [ $# -gt 0 ]; do
-        _batch=0
-        while [ "$_batch" -lt 3 ] && [ $# -gt 0 ]; do
+    _pids=""
+    _batch=0
+
+    while true; do
+        # start new downloads while we have slots and URLs left
+        while [ "$_batch" -lt "$_max" ] && [ $# -gt 0 ]; do
             _curl_url="$1"; shift
             (curl -sL --max-time 60 -A "$agent" -e "${anikoto_referer}/" "$_curl_url" \
                 | tail -c +$((_off + 1)) > "$_dir/seg${_i}.ts.part") &
+            _pids="$_pids $!"
             _batch=$((_batch + 1))
             _i=$((_i + 1))
         done
-        wait
-        _j=0
-        while [ "$_j" -lt "$_batch" ]; do
-            _si=$((_i - _batch + _j))
-            [ -s "$_dir/seg${_si}.ts.part" ] && mv "$_dir/seg${_si}.ts.part" "$_dir/seg${_si}.ts"
-            _j=$((_j + 1))
+
+        # wait for any one download to finish
+        _found=0
+        for _p in $_pids; do
+            kill -0 "$_p" 2>/dev/null && { _found=1; break; }
         done
+        [ "$_found" = 0 ] && break
+        sleep 0.2
+
+        # clean up completed PIDs
+        _new_pids=""
+        for _p in $_pids; do
+            if kill -0 "$_p" 2>/dev/null; then
+                _new_pids="$_new_pids $_p"
+            else
+                wait "$_p" 2>/dev/null
+                _batch=$((_batch - 1))
+            fi
+        done
+        _pids="$_new_pids"
+
+        # move completed .part files when no downloads are active
+        if [ -z "$_pids" ]; then
+            for _f in "$_dir"/seg*.ts.part; do
+                [ -f "$_f" ] || continue
+                _seg="${_f%.part}"
+                [ -f "$_seg" ] || mv "$_f" "$_seg" 2>/dev/null
+            done
+        fi
+    done
+
+    # move any remaining .part files
+    for _f in "$_dir"/seg*.ts.part; do
+        [ -f "$_f" ] || continue
+        _seg="${_f%.part}"
+        [ -f "$_seg" ] || mv "$_f" "$_seg" 2>/dev/null
     done
 }
 
@@ -661,7 +696,7 @@ play_episode() {
             # cache-secs caps read-ahead so mpv doesn't try to read past data
             # the feeder hasn't written yet
             if [ -n "$anikoto_feed_m3u8" ]; then
-                _mpv_args="$_mpv_args --cache=yes --cache-secs=30 --demuxer-max-bytes=512MiB --demuxer-max-back-bytes=256MiB"
+                _mpv_args="$_mpv_args --cache=yes --cache-secs=120 --demuxer-max-bytes=512MiB --demuxer-max-back-bytes=256MiB"
             fi
             if [ "$no_detach" = 0 ]; then
                 nohup $player_function $_mpv_args $skip_flag --tls-verify=no --force-media-title="${anime_title} Episode ${ep_no}" "$episode" $refr_flag $player_extra_flags >/dev/null 2>&1 &
@@ -686,7 +721,7 @@ play_episode() {
             [ -n "$_resume_pos" ] && [ "$_resume_pos" != "0" ] && _flatpak_resume="--start=$_resume_pos"
             _flatpak_cache=""
             if [ -n "$anikoto_feed_m3u8" ]; then
-                _flatpak_cache="--cache=yes --cache-secs=30 --demuxer-max-bytes=512MiB --demuxer-max-back-bytes=256MiB"
+                _flatpak_cache="--cache=yes --cache-secs=120 --demuxer-max-bytes=512MiB --demuxer-max-back-bytes=256MiB"
             fi
             if [ "$no_detach" = 0 ]; then
                 nohup flatpak run io.mpv.Mpv --input-ipc-server="$_mpv_socket" $_flatpak_resume $_flatpak_cache --tls-verify=no --force-media-title="${anime_title} Episode ${ep_no}" $skip_flag "$episode" $refr_flag $player_extra_flags >/dev/null 2>&1 &
