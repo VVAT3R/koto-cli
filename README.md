@@ -45,20 +45,32 @@ curl -fsSL https://raw.githubusercontent.com/VVAT3R/koto-cli/main/install.sh | s
 <details>
 <summary>Discord Rich Presence setup</summary>
 
-koto-cli can show your current anime in Discord's activity status. To enable it:
+koto-cli can show what you're watching in your Discord activity status (e.g. "One Piece Episode 1085"). This is fully optional — if not configured, nothing happens.
+
+#### How to get a Discord Application ID
 
 1. Go to [discord.com/developers/applications](https://discord.com/developers/applications)
 2. Click **New Application** → name it (e.g. "koto-cli") → **Create**
-3. Copy the **Application ID** from the General Information page
-4. Set it in your shell profile (`~/.bashrc`, `~/.zshrc`, etc.):
-   ```sh
-   export KOTO_CLI_DISCORD_CLIENT_ID="your_application_id_here"
-   ```
-5. Restart your terminal, then use koto-cli as normal
+3. On the **General Information** page, copy the **Application ID** (not the Public Key)
+4. (Optional) Upload a logo under **General Information → Icon** — this shows next to your activity
 
-If the env var is not set, Discord integration is completely disabled. Discord must be running on the same machine for it to work.
+#### Configure koto-cli
 
-Optional: upload a logo to your Application in the Discord Developer Portal to show a custom icon next to your activity.
+Add this to your shell profile (`~/.bashrc`, `~/.zshrc`, `~/.profile`, etc.):
+
+```sh
+export KOTO_CLI_DISCORD_CLIENT_ID="your_application_id_here"
+```
+
+Then restart your terminal or run `source ~/.bashrc`.
+
+#### How it works
+
+- On first play, koto-cli connects to Discord's local IPC socket (`/tmp/discord-ipc-0`)
+- While playing, your activity shows the anime title and episode number
+- When you quit or switch episodes, the activity is cleared
+- If `KOTO_CLI_DISCORD_CLIENT_ID` is not set, all Discord code is skipped
+- Discord must be running on the same machine
 
 </details>
 
