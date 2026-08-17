@@ -36,6 +36,11 @@ curl -fsSL https://raw.githubusercontent.com/VVAT3R/koto-cli/main/install.sh | s
 - Next-episode countdown (`-N`)
 - Install & uninstall scripts included
 
+### Notes on episode availability
+
+- **Episode not yet uploaded**: If the latest episode of an airing anime has been released but koto-cli shows it as unavailable, it means anikototv.to has not yet added it to their database. Try again later.
+- **No valid sources / soft-sub only**: If the episode exists on anikoto but koto-cli fails to play it, the episode likely only has a **soft-sub** server available. koto-cli only supports **hsub** (hard-sub) and **dub** servers. If an episode has no hsub or dub server, it cannot be played through koto-cli even if it exists on the provider.
+
 ### How koto-cli came to be
 
 koto-cli started as a fork of ani-cli whose provider didn't serve some anime that were missing from anidb.app — now the new default provider of upstream ani-cli — so I couldn't watch what I wanted to. So I reverse-engineered [anikototv.to](https://anikototv.to), inspecting its network requests, HTML and scripts in the browser devtools, and wrote an **anikoto** provider on top of ani-cli's structure. That work lived on the `ani-cli-anikoto` branch, and I spun it out into this standalone repo so it can live on its own, with no ties to ani-cli. It's still at an experimental stage — expect rough edges.
