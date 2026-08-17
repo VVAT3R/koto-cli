@@ -184,7 +184,9 @@ select_quality() {
         if [ -n "$anikoto_feed_pid" ] && [ "$anikoto_feed_variant" != "$episode" ]; then
             anikoto_feed_cleanup
         fi
-        [ -z "$anikoto_feed_pid" ] && start_anikoto_fifo "$episode" || { warn "Failed to prepare local feed for stream"; episode=""; return 1; }
+        if [ -z "$anikoto_feed_pid" ]; then
+            start_anikoto_fifo "$episode" || { warn "Failed to prepare local feed for stream"; episode=""; return 1; }
+        fi
         anikoto_feed_variant="$episode"
         episode="$anikoto_feed_m3u8"
     fi
@@ -312,9 +314,9 @@ get_anikoto_m3u8() {
     anime_episodes_json_anikoto "$anikoto_numeric_id"
     _anchor="$(printf '%s' "$anikoto_ep_clean" \
         | sed 's|<a |\n<a |g' | grep "data-num=\"${_ep_no}\"" | head -1)"
-    [ -z "$_anchor" ] && warn "Episode $ep_no not found in episode list" && return 1
+    [ -z "$_anchor" ] && warn "Episode $_ep_no not found in episode list" && return 1
     _ids="$(printf '%s' "$_anchor" | grep -oE 'data-ids="[^"]*"' | head -1 | cut -d'"' -f2)"
-    [ -z "$_ids" ] && warn "Episode $ep_no has no server data" && return 1
+    [ -z "$_ids" ] && warn "Episode $_ep_no has no server data" && return 1
     if [ "$mode" = "dub" ]; then
         _link_types="dub"
     else
@@ -546,7 +548,7 @@ time_until_next_ep() {
 process_hist_entry() {
     ep_list=$(episodes_list_anikoto "$id")
     latest_ep=$(printf "%s\n" "$ep_list" | tail -n1)
-    title=$(printf "%s\n" "$title" | sed "s|[0-9]\+ episodes|${latest_ep} episodes|")
+    title=$(printf "%s\n" "$title" | sed "s|[0-9][0-9]* episodes|${latest_ep} episodes|")
     ep_no=$(printf "%s" "$ep_list" | sed -n "/^${ep_no}$/{n;p;}")
     [ -n "$ep_no" ] && printf "%s\t%s - episode %s\n" "$id" "$title" "$ep_no"
     [ -n "$ep_no" ] || printf "%s\t%s - episode %s (up to date)\n" "$id" "$title" "$latest_ep"
@@ -556,7 +558,8 @@ update_history() {
     _pos="${1:-0}"
     if grep -qF "	${id}	" "$histfile"; then
         safe_title=$(printf '%s' "$title" | sed 's/[&\|]/\\&/g')
-        sed -E "s|^[^	]+	${id}	[^	]+(	[^	]+)?$|${ep_no}	${id}	${safe_title}	${_pos}|" "$histfile" >"${histfile}.new"
+        safe_id=$(printf '%s' "$id" | sed 's/[.[\*^$]/\\&/g')
+        sed -E "s|^[^	]+	${safe_id}	[^	]+(	[^	]+)?$|${ep_no}	${safe_id}	${safe_title}	${_pos}|" "$histfile" >"${histfile}.new"
     else
         cp "$histfile" "${histfile}.new"
         printf "%s\t%s\t%s\t%s\n" "$ep_no" "$id" "$title" "$_pos" >>"${histfile}.new"
@@ -929,7 +932,7 @@ case "$search" in
         ep_no=$(printf "%s" "$anime_list" | grep "$id" | cut -f2 | sed -nE 's/.*- episode (.+)$/\1/p')
         anime_title="$(printf "%s" "$title" | cut -d'(' -f1 | tr -d '[:punct:]')"
         anikoto_desc "$id" || true
-        printf "%s" "$anime_list" | grep "$id" | cut -f2 | grep -q "(up to date)" && time_until_next_ep "$anime_title" && exit 0
+        printf "%s" "$anime_list" | grep "$id" | cut -f2 | grep -q "(up to date)" && { time_until_next_ep "$anime_title"; exit 0; }
         ;;
     *)
         if [ "$menu_program" = "fzf" ]; then
@@ -990,9 +993,9 @@ while cmd=$(printf 'next\nreplay\nprevious\nselect\nchange_quality\nseasons\nqui
         esac
     fi
     case "$cmd" in
-        next) ep_no=$(printf "%s" "$ep_list" | sed -n "/^${ep_no}$/{n;p;}") 2>/dev/null ;;
+        next) safe_ep=$(printf '%s' "$ep_no" | sed 's|[.[\*^$/]|\\&|g'); ep_no=$(printf "%s" "$ep_list" | sed -n "/^${safe_ep}$/{n;p;}") 2>/dev/null ;;
         replay) episode="$replay" ;;
-        previous) ep_no=$(printf "%s" "$ep_list" | sed -n "/^${ep_no}$/{g;1!p;};h") 2>/dev/null ;;
+        previous) safe_ep=$(printf '%s' "$ep_no" | sed 's|[.[\*^$/]|\\&|g'); ep_no=$(printf "%s" "$ep_list" | sed -n "/^${safe_ep}$/{g;1!p;};h") 2>/dev/null ;;
         select) ep_no=$(printf "%s" "$ep_list" | nth "Select episode: " "$menu_multi_flag") ;;
         seasons)
             _seasons="$(search_anikoto "$anime_title")"
