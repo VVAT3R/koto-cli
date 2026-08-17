@@ -426,14 +426,20 @@ anikoto_feed_stream() {
         _ln=$((_ln + 1))
         [ "$_skip_first" = 1 ] && [ "$_ln" -eq 1 ] && continue
         [ -z "$_url" ] && continue
-        if [ -p "$_dir/seg${_i}.ts" ]; then
-            curl -sL -m 60 -A "$agent" -e "${anikoto_referer}/" "$_url" \
-                | tail -c +$((_off + 1)) > "$_dir/seg${_i}.ts"
-        else
-            curl -sL -m 60 -A "$agent" -e "${anikoto_referer}/" "$_url" \
-                | tail -c +$((_off + 1)) > "$_dir/seg${_i}.ts.part"
-            mv "$_dir/seg${_i}.ts.part" "$_dir/seg${_i}.ts"
-        fi
+        _seg_retries=3
+        while [ "$_seg_retries" -gt 0 ]; do
+            if [ -p "$_dir/seg${_i}.ts" ]; then
+                curl -sL -m 60 -A "$agent" -e "${anikoto_referer}/" "$_url" \
+                    | tail -c +$((_off + 1)) > "$_dir/seg${_i}.ts"
+            else
+                curl -sL -m 60 -A "$agent" -e "${anikoto_referer}/" "$_url" \
+                    | tail -c +$((_off + 1)) > "$_dir/seg${_i}.ts.part"
+                mv "$_dir/seg${_i}.ts.part" "$_dir/seg${_i}.ts"
+            fi
+            [ -s "$_dir/seg${_i}.ts" ] && break
+            _seg_retries=$((_seg_retries - 1))
+            [ "$_seg_retries" -gt 0 ] && sleep 2
+        done
         _i=$((_i + 1))
     done < "$_dir/segments.txt"
 }
@@ -502,8 +508,8 @@ start_anikoto_fifo() {
         _n=0
         _waits=0
         while [ "$_waits" -lt 60 ]; do
-            while [ -f "$anikoto_feed_dir/seg$_n.ts" ]; do _n=$((_n + 1)); done
-            [ "$_n" -ge 3 ] && break
+            while [ -s "$anikoto_feed_dir/seg$_n.ts" ]; do _n=$((_n + 1)); done
+            [ "$_n" -ge 5 ] && break
             sleep 1
             _waits=$((_waits + 1))
         done
