@@ -15,7 +15,7 @@
 
 ---
 
-A standalone POSIX shell script to browse, search and watch anime from the command-line, inspired by [pystardust/ani-cli](https://github.com/pystardust/ani-cli). It scrapes **anikototv.to** for direct HLS streams — no crypto dependencies.
+A standalone POSIX shell script to browse, search and watch anime from the command-line, inspired by [pystardust/ani-cli](https://github.com/pystardust/ani-cli). Built by reverse-engineering [anikototv.to](https://anikototv.to) — decoding how it serves HLS streams from its obfuscated embeds — to extract playable `.m3u8` links without any crypto dependencies or API keys.
 
 ### Quick start
 
