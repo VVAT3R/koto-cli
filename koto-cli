@@ -15,7 +15,7 @@ menu() {
 }
 
 nth() {
-    stdin=$(cat -)
+    stdin=$(cat)
     [ -z "$stdin" ] && return 1
     line_count="$(printf "%s\n" "$stdin" | wc -l | tr -d "[:space:]")"
     [ "$line_count" -eq 1 ] && printf "%s" "$stdin" | cut -f2,3 && return 0
@@ -301,6 +301,7 @@ anikoto_server_links() {
     done
     printf '%s' "$_all"
 }
+
 get_anikoto_m3u8() {
     _slug="$1"
     _ep_no="$2"
@@ -430,9 +431,9 @@ anikoto_feed_stream() {
 }
 
 # builds a local m3u8 + segment cache for an obfuscated variant stream and
-# starts the feeder; the junk prefix length is auto-detected like the old
-# proxy did. downloads use named pipes (flow control), playback uses regular
-# files (seekable), so mpv can rewind during an episode
+# starts the feeder; strips junk prefix (fixed 252 bytes) from each segment.
+# segments are written via .part + atomic mv so a partial segment is never
+# visible, which lets mpv re-open segments for backward seeking
 start_anikoto_fifo() {
     _variant_url="$1"
     _pl="$(anikoto_curl_raw -e "${anikoto_referer}/" "$_variant_url")"
@@ -478,7 +479,12 @@ start_anikoto_fifo() {
         _n=0
         _waits=0
         while [ "$_waits" -lt 60 ]; do
-            while [ -s "$anikoto_feed_dir/seg$_n.ts" ]; do _n=$((_n + 1)); done
+            _n=0
+            _j=0
+            while [ "$_j" -lt 5 ]; do
+                [ -s "$anikoto_feed_dir/seg$_j.ts" ] && _n=$((_n + 1))
+                _j=$((_j + 1))
+            done
             [ "$_n" -ge 5 ] && break
             sleep 1
             _waits=$((_waits + 1))
@@ -613,7 +619,7 @@ android_mpv() {
 }
 
 play_episode() {
-    [ "$log_episode" = 1 ] && [ "$player_function" != "debug" ] && [ "$player_function" != "download" ] && command -v logger >/dev/null &&         logger -t koto-cli "${anime_title}${ep_no}"
+    [ "$log_episode" = 1 ] && [ "$player_function" != "debug" ] && [ "$player_function" != "download" ] && command -v logger >/dev/null && logger -t koto-cli "${anime_title}${ep_no}"
     [ "$skip_intro" = 1 ] && skip_flag="$(ani-skip -q "$mal_id" -e "$canon_ep_no")"
     [ -z "$episode" ] && get_episode_url
 
