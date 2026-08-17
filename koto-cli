@@ -408,8 +408,8 @@ detect_ts_offset() {
 }
 
 # background feeder: downloads each obfuscated segment, strips the junk prefix
-# and writes clean MPEG-TS so the player can read it (pure POSIX shell, no
-# python3). downloads run 3 at a time for throughput; each segment is written
+# and writes clean MPEG-TS so the player can read it (pure POSIX shell).
+# downloads run 3 at a time for throughput; each segment is written
 # via .part + atomic mv so a partial segment is never visible, which lets mpv
 # re-open segments for backward seeking
 anikoto_feed_stream() {

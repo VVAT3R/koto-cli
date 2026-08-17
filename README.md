@@ -43,7 +43,7 @@ curl -fsSL https://raw.githubusercontent.com/VVAT3R/koto-cli/main/install.sh | s
 
 ### How koto-cli came to be
 
-koto-cli started as a fork of ani-cli whose provider missed some anime I wanted to watch. I reverse-engineered [anikototv.to](https://anikototv.to) and built an **anikoto** provider, then spun it out into this standalone repo. Everything runs in plain POSIX shell — no API keys, no crypto, no python3.
+koto-cli started as a fork of ani-cli whose provider missed some anime I wanted to watch. I reverse-engineered [anikototv.to](https://anikototv.to) and built an **anikoto** provider, then spun it out into this standalone repo. Everything runs in plain POSIX shell — no API keys, no crypto, no external dependencies.
 
 The pipeline: search the site's AJAX endpoints → extract anime ID and episode list → resolve hsub/sub/soft-server/dub servers → grab `.m3u8` streams from megaplay embeds → auto-detect and strip obfuscated segment prefixes → feed clean MPEG-TS to the player.
 
