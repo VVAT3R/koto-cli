@@ -43,16 +43,9 @@ curl -fsSL https://raw.githubusercontent.com/VVAT3R/koto-cli/main/install.sh | s
 
 ### How koto-cli came to be
 
-koto-cli started as a fork of ani-cli whose provider didn't serve some anime that were missing from anidb.app — now the new default provider of upstream ani-cli — so I couldn't watch what I wanted to. So I reverse-engineered [anikototv.to](https://anikototv.to), inspecting its network requests, HTML and scripts in the browser devtools, and wrote an **anikoto** provider on top of ani-cli's structure. That work lived on the `ani-cli-anikoto` branch, and I spun it out into this standalone repo so it can live on its own, with no ties to ani-cli. It's still at an experimental stage — expect rough edges.
+koto-cli started as a fork of ani-cli whose provider missed some anime I wanted to watch. I reverse-engineered [anikototv.to](https://anikototv.to) and built an **anikoto** provider, then spun it out into this standalone repo. Everything runs in plain POSIX shell — no API keys, no crypto, no python3.
 
-The whole pipeline runs in plain POSIX shell — no API keys, no crypto, no python3:
-
-1. **Search** hits the site's `ajax/anime/search?keyword=...` endpoint (with an `X-Requested-With: XMLHttpRequest` header) and regexes the returned HTML into `slug` + title pairs.
-2. **Anime ID** is read from the watch page's `id="watch-main" data-id="..."` attribute (falling back to the `mangaId = ...` script variable) and cached so it's fetched only once per title.
-3. **Episodes** come from `ajax/episode/list/<id>` — `data-num` attributes yield the episode numbers, `data-ids` links them to their server groups.
-4. **Servers** are resolved via `ajax/server/list?servers=<ids>`. Each entry has a `data-type` (**hsub** = hard subs, **dub**) and a `data-link-id`. koto-cli asks for `hsub` by default and `dub` with `--dub`. If the server list comes back empty, it pings `/check-server` once to force the site to refresh the links.
-5. **Streams**: each server resolves to a megaplay embed (`ajax/server?get=<link-id>`). koto-cli grabs the `#megaplay-player` `data-id`, then calls `<host>/stream/getSources?id=<file-id>&type=<type>` for the `.m3u8`. Direct-playable hosts (vidtube, akirax) are tried first, proxied ones second.
-6. **Feeder**: the m3u8 segments are obfuscated — real MPEG-TS with a junk prefix. koto-cli auto-detects the prefix by scanning for the TS sync byte `0x47` repeated every 188 bytes, then a pure-POSIX background feeder downloads each segment, strips the junk, and writes clean `.ts` files into a local cache dir that the player reads from a local `playlist.m3u8` (FIFOs for download flow control, regular files so mpv can seek back).
+The pipeline: search the site's AJAX endpoints → extract anime ID and episode list → resolve hsub/dub servers → grab `.m3u8` streams from megaplay embeds → auto-detect and strip obfuscated segment prefixes → feed clean MPEG-TS to the player.
 
 ### Usage
 
