@@ -544,7 +544,7 @@ process_hist_entry() {
 
 update_history() {
     _pos="${1:-0}"
-    if grep -q "	${id}	" "$histfile"; then
+    if grep -qF "	${id}	" "$histfile"; then
         safe_title=$(printf '%s' "$title" | sed 's/[&\|]/\\&/g')
         sed -E "s|^[^	]+	${id}	[^	]+(	[^	]+)?$|${ep_no}	${id}	${safe_title}	${_pos}|" "$histfile" >"${histfile}.new"
     else
@@ -577,8 +577,9 @@ get_mpv_position() {
 
 resume_episode() {
     _hist_id="$1"
-    _pos=$(grep -- "$_hist_id" "$histfile" | cut -f4)
-    [ -z "$_pos" ] || [ "$_pos" = "0" ] && return 1
+    _pos=$(grep -F "$_hist_id" "$histfile" | cut -f4)
+    [ -z "$_pos" ] && return 1
+    [ "$_pos" = "0" ] && return 1
     printf "%.0f" "$_pos"
 }
 
@@ -648,27 +649,37 @@ play_episode() {
                 _mpv_args="$_mpv_args --cache=yes --demuxer-max-bytes=512MiB --demuxer-max-back-bytes=256MiB"
             fi
             if [ "$no_detach" = 0 ]; then
-                nohup $player_function $_mpv_args $skip_flag --tls-verify=no --force-media-title="${anime_title}Episode ${ep_no}" "$episode" $refr_flag $player_extra_flags >/dev/null 2>&1 &
+                nohup $player_function $_mpv_args $skip_flag --tls-verify=no --force-media-title="${anime_title} Episode ${ep_no}" "$episode" $refr_flag $player_extra_flags >/dev/null 2>&1 &
             else
-                $player_function $_mpv_args $skip_flag $refr_flag --tls-verify=no --force-media-title="${anime_title}Episode ${ep_no}" "$episode" $player_extra_flags
+                $player_function $_mpv_args $skip_flag $refr_flag --tls-verify=no --force-media-title="${anime_title} Episode ${ep_no}" "$episode" $player_extra_flags
                 mpv_exitcode=$?
                 [ "$exit_after_play" = 1 ] && [ -z "$range" ] && exit "$mpv_exitcode"
             fi
             ;;
-        android_mpv) "$player_function" "$episode" "${anime_title}Episode ${ep_no}" "--tls-verify=no $refr_flag" $player_extra_flags 2>&1 & ;;
-        android_vlc) nohup am start --user 0 -a android.intent.action.VIEW -d "$episode" -n org.videolan.vlc/org.videolan.vlc.gui.video.VideoPlayerActivity -e "title" "${anime_title}Episode ${ep_no}" $player_extra_flags >/dev/null 2>&1 & ;;
+        android_mpv) "$player_function" "$episode" "${anime_title} Episode ${ep_no}" "--tls-verify=no $refr_flag" $player_extra_flags 2>&1 & ;;
+        android_vlc) nohup am start --user 0 -a android.intent.action.VIEW -d "$episode" -n org.videolan.vlc/org.videolan.vlc.gui.video.VideoPlayerActivity -e "title" "${anime_title} Episode ${ep_no}" $player_extra_flags >/dev/null 2>&1 & ;;
         *iina*)
             [ -n "$refr_flag" ] && refr_flag="--mpv-${refr_flag#--}"
             if pgrep -f "IINA" >/dev/null 2>&1; then
-                nohup $player_function --no-stdin --mpv-tls-verify=no --mpv-force-media-title="${anime_title}Episode ${ep_no}" $refr_flag "$episode" $player_extra_flags >/dev/null 2>&1 &
+                nohup $player_function --no-stdin --mpv-tls-verify=no --mpv-force-media-title="${anime_title} Episode ${ep_no}" $refr_flag "$episode" $player_extra_flags >/dev/null 2>&1 &
             else
-                nohup $player_function --no-stdin --mpv-tls-verify=no --keep-running --mpv-force-media-title="${anime_title}Episode ${ep_no}" $refr_flag "$episode" $player_extra_flags >/dev/null 2>&1 &
+                nohup $player_function --no-stdin --mpv-tls-verify=no --keep-running --mpv-force-media-title="${anime_title} Episode ${ep_no}" $refr_flag "$episode" $player_extra_flags >/dev/null 2>&1 &
             fi
             ;;
-        flatpak_mpv) flatpak run io.mpv.Mpv --input-ipc-server="$_mpv_socket" --start="$_resume_pos" --tls-verify=no --force-media-title="${anime_title}Episode ${ep_no}" "$episode" $refr_flag $player_extra_flags >/dev/null 2>&1 & ;;
-        vlc*) nohup $player_function --http-referrer="${refr_flag#--referrer=}" --play-and-exit --meta-title="${anime_title}Episode ${ep_no}" "$episode" $player_extra_flags >/dev/null 2>&1 & ;;
-        *yncpla*) nohup $player_function "$episode" $player_extra_flags -- --tls-verify=no --force-media-title="${anime_title}Episode ${ep_no}" $refr_flag >/dev/null 2>&1 & ;;
-        download) "$player_function" "$episode" "${anime_title}Episode ${ep_no}" $player_extra_flags ;;
+        flatpak_mpv)
+            _flatpak_resume=""
+            [ -n "$_resume_pos" ] && [ "$_resume_pos" != "0" ] && _flatpak_resume="--start=$_resume_pos"
+            if [ "$no_detach" = 0 ]; then
+                nohup flatpak run io.mpv.Mpv --input-ipc-server="$_mpv_socket" $_flatpak_resume --tls-verify=no --force-media-title="${anime_title} Episode ${ep_no}" $skip_flag "$episode" $refr_flag $player_extra_flags >/dev/null 2>&1 &
+            else
+                flatpak run io.mpv.Mpv --input-ipc-server="$_mpv_socket" $_flatpak_resume --tls-verify=no --force-media-title="${anime_title} Episode ${ep_no}" $skip_flag $refr_flag "$episode" $player_extra_flags
+                mpv_exitcode=$?
+                [ "$exit_after_play" = 1 ] && [ -z "$range" ] && exit "$mpv_exitcode"
+            fi
+            ;;
+        vlc*) nohup $player_function --http-referrer="${refr_flag#--referrer=}" --play-and-exit --meta-title="${anime_title} Episode ${ep_no}" "$episode" $player_extra_flags >/dev/null 2>&1 & ;;
+        *yncpla*) nohup $player_function "$episode" $player_extra_flags -- --tls-verify=no --force-media-title="${anime_title} Episode ${ep_no}" $refr_flag >/dev/null 2>&1 & ;;
+        download) "$player_function" "$episode" "${anime_title} Episode ${ep_no}" $player_extra_flags ;;
         catt) nohup catt cast "$episode" $player_extra_flags >/dev/null 2>&1 & ;;
         iSH)
             printf "\e]8;;vlc://%s\a~~~~~~~~~~~~~~~~~~~~\n~ Tap to open VLC ~\n~~~~~~~~~~~~~~~~~~~~\e]8;;\a\n" "$episode"
@@ -726,7 +737,7 @@ play() {
                 _count=$((_count + 1))
                 printf "\33[2K\r\033[1;34m[%s/%s] Downloading episode %s...\033[0m\n" "$_count" "$_total" "$ep_no"
                 # skip if already downloaded
-                _fname="${anime_title}Episode ${ep_no}.mp4"
+                _fname="${anime_title} Episode ${ep_no}.mp4"
                 if [ -f "$download_dir/$_fname" ]; then
                     printf "\33[2K\r\033[1;33mSkipping episode %s (already exists)\033[0m\n" "$ep_no"
                     continue
@@ -859,7 +870,7 @@ while [ $# -gt 0 ]; do
         -N | --nextep-countdown) search=nextep ;;
         -U | --update)
             dep_ch "patch"
-            branch="${2:-$branch}"
+            [ $# -ge 2 ] && [ "${2#-}" = "$2" ] && branch="$2"
             update_script
             ;;
         *) query="$(printf "%s" "$query $1" | sed "s|^ ||;s| |+|g")" ;;
@@ -898,8 +909,7 @@ trap 'cleanup' EXIT
 case "$search" in
     history)
         backup_old_hist
-        anime_list=$(while read -r ep_no id title _pos; do process_hist_entry & done <"$histfile")
-        wait
+        anime_list=$(while read -r ep_no id title _pos; do process_hist_entry; done <"$histfile")
         [ -z "$anime_list" ] && die "No unwatched series in history!"
         [ -z "${index##*[!0-9]*}" ] && id=$(printf "%s" "$anime_list" | nl -w 2 | sed 's/^[[:space:]]//' | nth "Select anime: " | cut -f1)
         [ -z "${index##*[!0-9]*}" ] || id=$(printf "%s" "$anime_list" | sed -n "${index}p" | cut -f1)
@@ -937,7 +947,7 @@ case "$search" in
         anikoto_desc "$id" || true
         ep_list=$(episodes_list_anikoto "$id")
         [ -z "$ep_list" ] && die "Could not fetch episodes for \"$title\" - it may be unavailable on anikototv.to, try another result"
-        [ -n "$ep_no" ] && [ "$ep_no" -ne -1 ] && ! printf "%s" "$ep_list" | grep -q "^$ep_no$" && die "Invalid Episode Selection"
+        [ -n "$ep_no" ] && [ "$ep_no" != "-1" ] && ! printf "%s" "$ep_list" | grep -q "^$ep_no$" && die "Invalid Episode Selection"
         [ -z "$ep_no" ] && ep_no=$(printf "%s" "$ep_list" | nth "Select episode: " "$menu_multi_flag")
         [ -z "$ep_no" ] && die "Invalid/No Episode Selection"
         ;;
@@ -980,7 +990,7 @@ while cmd=$(printf 'next\nreplay\nprevious\nselect\nchange_quality\nseasons\nqui
             [ -z "$ep_no" ] && die "Invalid/No Episode Selection"
             ;;
         change_quality)
-            new_quality="$(printf "%s" "$links" | menu | cut -d">" -f1)"
+            new_quality="$(printf "%s" "$links" | menu "Select quality: " "" "$menu_extra_flags" | cut -d">" -f1)"
             [ -z "$new_quality" ] && die "No quality selected"
             select_quality "$new_quality"
             ;;
