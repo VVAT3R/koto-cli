@@ -37,7 +37,28 @@ curl -fsSL https://raw.githubusercontent.com/VVAT3R/koto-cli/main/install.sh | s
 - Skip intros with ani-skip (`--skip`, mpv only)
 - Player support: mpv, vlc, iina, android, flatpak, syncplay and more
 - Next-episode countdown (`-N`)
+- Discord Rich Presence — show what you're watching (optional)
 - Install & uninstall scripts included
+
+</details>
+
+<details>
+<summary>Discord Rich Presence setup</summary>
+
+koto-cli can show your current anime in Discord's activity status. To enable it:
+
+1. Go to [discord.com/developers/applications](https://discord.com/developers/applications)
+2. Click **New Application** → name it (e.g. "koto-cli") → **Create**
+3. Copy the **Application ID** from the General Information page
+4. Set it in your shell profile (`~/.bashrc`, `~/.zshrc`, etc.):
+   ```sh
+   export KOTO_CLI_DISCORD_CLIENT_ID="your_application_id_here"
+   ```
+5. Restart your terminal, then use koto-cli as normal
+
+If the env var is not set, Discord integration is completely disabled. Discord must be running on the same machine for it to work.
+
+Optional: upload a logo to your Application in the Discord Developer Portal to show a custom icon next to your activity.
 
 </details>
 
