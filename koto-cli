@@ -1026,7 +1026,25 @@ play
 [ "$player_function" = "download" ] && exit 0
 [ "$player_function" = "debug" ] && exit 0
 
-while cmd=$(printf 'next\nreplay\nprevious\nselect\nchange_quality\nseasons\nquit' | nth "Playing episode $ep_no of $title... "); do
+# check if other seasons exist before building the menu
+_has_seasons=0
+[ "$player_function" != "download" ] && [ "$player_function" != "debug" ] && {
+    _check_seasons="$(search_anikoto "$anime_title" 2>/dev/null)"
+    _season_count="$(printf '%s' "$_check_seasons" | grep -c . 2>/dev/null)"
+    [ "$_season_count" -gt 1 ] && _has_seasons=1
+}
+
+_menu="next
+replay
+previous
+select
+change_quality"
+[ "$_has_seasons" = 1 ] && _menu="${_menu}
+seasons"
+_menu="${_menu}
+quit"
+
+while cmd=$(printf '%s' "$_menu" | nth "Playing episode $ep_no of $title... "); do
     # save playback position before acting on the menu choice
     if [ "$menu_program" = "fzf" ]; then
         case "$player_function" in
