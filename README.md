@@ -19,8 +19,14 @@ A standalone POSIX shell script to browse, search and watch anime from the comma
 
 ### Quick start
 
+**Install:**
 ```sh
 curl -fsSL https://raw.githubusercontent.com/VVAT3R/koto-cli/main/install.sh | sudo sh
+```
+
+**Uninstall:**
+```sh
+curl -fsSL https://raw.githubusercontent.com/VVAT3R/koto-cli/main/uninstall.sh | sudo sh
 ```
 
 <details>
