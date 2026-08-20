@@ -272,6 +272,22 @@ episodes_list_anikoto() {
         | grep -oE 'data-num="[0-9]+"' | grep -oE '[0-9]+' | sort -n -u
 }
 
+anikoto_seasons_cached_id=""
+anikoto_seasons_cached=""
+anikoto_seasons() {
+    _id="$1"
+    if [ "$anikoto_seasons_cached_id" != "$_id" ]; then
+        _raw="$(anikoto_curl "${provider_base}/api/seasons/${_id}")"
+        anikoto_seasons_cached=""
+        [ -n "$_raw" ] && anikoto_seasons_cached="$(printf '%s' "$_raw" \
+            | sed -e 's/\\"/"/g' -e 's|\\/|/|g' \
+            | sed 's|</a>|\n</a>|g' \
+            | sed -nE 's|.*watch/([a-z0-9-]+)".*<div class="name"[^>]*>([^<]+)<.*|\1	\2|p')"
+        anikoto_seasons_cached_id="$_id"
+    fi
+    printf '%s' "$anikoto_seasons_cached"
+}
+
 anikoto_desc() {
     _slug="$1"
     anime_id_anikoto "$_slug" || return 1
@@ -279,6 +295,7 @@ anikoto_desc() {
     _first="$(printf '%s' "$anikoto_ep_clean" \
         | sed 's|<a |\n<a |g' | grep 'data-num="1"' | head -1)"
     mal_id="$(printf '%s' "$_first" | grep -oE 'data-mal="[0-9]+"' | head -1 | cut -d'"' -f2)"
+    anikoto_seasons "$anikoto_numeric_id" >/dev/null
 }
 
 anikoto_m3u8=""
@@ -1026,11 +1043,10 @@ play
 [ "$player_function" = "download" ] && exit 0
 [ "$player_function" = "debug" ] && exit 0
 
-# check if other seasons exist before building the menu
+# check if other seasons exist (cached from anikoto_desc)
 _has_seasons=0
 [ "$player_function" != "download" ] && [ "$player_function" != "debug" ] && {
-    _check_seasons="$(search_anikoto "$anime_title" 2>/dev/null)"
-    _season_count="$(printf '%s' "$_check_seasons" | grep -c . 2>/dev/null)"
+    _season_count="$(printf '%s' "$anikoto_seasons_cached" | grep -c . 2>/dev/null)"
     [ "$_season_count" -gt 1 ] && _has_seasons=1
 }
 
@@ -1057,13 +1073,13 @@ while cmd=$(printf '%s' "$_menu" | nth "Playing episode $ep_no of $title... "); 
         previous) safe_ep=$(printf '%s' "$ep_no" | sed 's|[.[\*^$/]|\\&|g'); ep_no=$(printf "%s" "$ep_list" | sed -n "/^${safe_ep}$/{g;1!p;};h") 2>/dev/null ;;
         select) ep_no=$(printf "%s" "$ep_list" | nth "Select episode: " "$menu_multi_flag") ;;
         seasons)
-            _seasons="$(search_anikoto "$anime_title")"
+            _seasons="$(anikoto_seasons "$anikoto_numeric_id")"
             [ -z "$_seasons" ] && die "No other versions of \"$title\" found"
-            new_anime="$(printf "%s" "$_seasons" | nl -w 2 | sed 's/^[[:space:]]//' | nth "Select anime: ")"
+            new_anime="$(printf '%s' "$_seasons" | nl -w 2 | sed 's/^[[:space:]]//' | nth "Select anime: ")"
             [ -z "$new_anime" ] && die "Invalid/No Anime Selection"
-            id="$(printf "%s" "$new_anime" | cut -f1)"
-            title="$(printf "%s" "$new_anime" | cut -f2)"
-            anime_title="$(printf "%s" "$title" | cut -d'(' -f1 | tr -d '[:punct:]')"
+            id="$(printf '%s' "$new_anime" | cut -f1)"
+            title="$(printf '%s' "$new_anime" | cut -f2)"
+            anime_title="$(printf '%s' "$title" | cut -d'(' -f1 | tr -d '[:punct:]')"
             anikoto_desc "$id" || true
             ep_list=$(episodes_list_anikoto "$id")
             [ -z "$ep_list" ] && die "Could not fetch episodes for \"$title\""
